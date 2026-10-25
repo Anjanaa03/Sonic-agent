@@ -53,20 +53,38 @@ function extractJson(text) {
   return JSON.parse(t.slice(a, b + 1));
 }
 
+let usedModel = null;
+function lastUsedModel() { return usedModel; }
+
+// Tries the configured model first. On a 400 about JSON mode it retries without JSON mode. On 400/404/503 it tries the
+// next model (GROQ_FALLBACK_MODELS, comma separated). Auth, rate limit and network errors stop immediately.
 async function callGroq(system, messages) {
-  const res = await fetch(GROQ_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.GROQ_API_KEY },
-    body: JSON.stringify({
-      model: modelName(), temperature: 0.2, max_tokens: 700,
-      response_format: { type: 'json_object' },
-      messages: [{ role: 'system', content: system }, ...messages],
-    }),
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!res.ok) throw new Error('Groq HTTP ' + res.status + ' ' + (await res.text()).slice(0, 160));
-  const data = await res.json();
-  return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+  const extra = (process.env.GROQ_FALLBACK_MODELS || 'llama-3.1-8b-instant,openai/gpt-oss-20b').split(',').map((s) => s.trim()).filter(Boolean);
+  const models = [...new Set([modelName(), ...extra])];
+  let lastErr;
+  for (const model of models) {
+    for (const jsonMode of [true, false]) {
+      const payload = { model, temperature: 0.2, max_tokens: 700, messages: [{ role: 'system', content: system }, ...messages] };
+      if (jsonMode) payload.response_format = { type: 'json_object' };
+      const res = await fetch(GROQ_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.GROQ_API_KEY },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        usedModel = model;
+        return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+      }
+      const body = (await res.text()).replace(/\s+/g, ' ').slice(0, 220);
+      lastErr = new Error(`Groq ${res.status} on ${model}${jsonMode ? '' : ' (no JSON mode)'}: ${body}`);
+      if ([401, 403, 429].includes(res.status)) throw lastErr;
+      if (res.status === 400 && jsonMode && /json/i.test(body)) continue; // retry the same model without JSON mode
+      break; // next model
+    }
+  }
+  throw lastErr;
 }
 
 async function callAnthropic(system, messages) {
@@ -85,9 +103,11 @@ async function callLLM(call, context, callerText) {
   const system = loadSystemPrompt();
   const messages = buildMessages(call, context, callerText);
   const text = provider() === 'groq' ? await callGroq(system, messages) : await callAnthropic(system, messages);
-  const parsed = extractJson(text);
-  if (typeof parsed.reply !== 'string' || !parsed.call_state) throw new Error('bad shape');
+  let parsed;
+  try { parsed = extractJson(text); } catch (e) { throw new Error('Model did not return JSON: ' + String(text).slice(0, 120)); }
+  if (typeof parsed.reply !== 'string' || !parsed.reply.trim()) throw new Error('Model JSON had no reply: ' + String(text).slice(0, 120));
+  if (!parsed.call_state || typeof parsed.call_state !== 'object') parsed.call_state = {}; // lenient: keep the reply, skip state merge
   return parsed;
 }
 
-module.exports = { callLLM, available, provider, modelName, loadSystemPrompt, buildMessages };
+module.exports = { callLLM, available, provider, modelName, lastUsedModel, loadSystemPrompt, buildMessages };
