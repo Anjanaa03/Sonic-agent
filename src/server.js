@@ -59,7 +59,6 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && p === '/api/state') return send(res, 200, engine.publicState(profile));
     if (req.method === 'GET' && p === '/api/metrics') return send(res, 200, engine.metrics(profile));
-    if (req.method === 'GET' && p === '/api/prompt') { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(llm.loadSystemPrompt()); }
     if (req.method === 'POST' && p.startsWith('/api/')) {
       if (p === '/api/call/message' && limited(ip)) return send(res, 429, { error: 'Too many messages, wait a minute.' });
       const b = await body(req);
