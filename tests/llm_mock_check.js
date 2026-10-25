@@ -7,6 +7,8 @@ let mode = 'good'; let lastReq = null;
 const mock = http.createServer((req, res) => {
   let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => {
     lastReq = { auth: req.headers.authorization, body: JSON.parse(b) };
+    if (mode === 'rate429' && !global.__retried) { global.__retried = true; res.writeHead(429); return res.end('{"error":{"message":"Rate limit reached on tokens per minute (TPM): Limit 8000, Used 4063, Requested 5046. Please try again in 0.2s."}}'); }
+    if (mode === 'tpm') { res.writeHead(429); return res.end('{"error":{"message":"Rate limit reached for model on service tier on_demand on tokens per minute (TPM): Limit 8000. Please try again in 40s."}}'); }
     if (mode === 'fail') { res.writeHead(500); return res.end('boom'); }
     if (mode === 'json400' && lastReq.body.response_format) { res.writeHead(400); return res.end('{"error":{"message":"json_validate_failed: Failed to generate JSON"}}'); }
     if (mode === 'badmodel' && lastReq.body.model === 'llama-3.3-70b-versatile') { res.writeHead(404); return res.end('{"error":{"message":"model_not_found"}}'); }
@@ -47,6 +49,19 @@ mock.listen(0, async () => {
   mode = 'badmodel'; // configured model missing: next model is tried
   r = await e.message('existing', s.call.id, 'Hello again', 'auto');
   ok(r.engine === 'llm' && lastReq.body.model !== 'llama-3.3-70b-versatile', 'should fall to the next model, used ' + lastReq.body.model);
+  mode = 'rate429'; // short TPM wait: wait and retry once
+  r = await e.message('existing', s.call.id, 'Any news?', 'auto');
+  ok(r.engine === 'llm', 'should wait out a short 429 and retry, got ' + r.engine);
+  mode = 'tpm'; // long TPM wait: stop, fall back, show the reason
+  r = await e.message('existing', s.call.id, 'Hello??', 'auto');
+  ok(r.engine === 'rules' && /429/.test(e.publicState('existing').llmLastError || ''), 'long 429 should fall back with the reason shown');
+  // token budget of one request on a fresh call (chars / 4 is a rough token estimate)
+  mode = 'good';
+  const s2 = e.startCall('existing', { number: '+91 80000 11111' });
+  await e.message('existing', s2.call.id, 'Hi, SwiftShip, ref SS48213, what is the address?', 'auto');
+  const sent = JSON.stringify(lastReq.body);
+  ok(sent.length / 4 < 3200, 'request too large for a small TPM tier: about ' + Math.round(sent.length / 4) + ' tokens');
+  console.log('approx tokens per request (system + context + history + max_tokens):', Math.round(sent.length / 4) + lastReq.body.max_tokens);
   mode = 'fail';
   r = await e.message('existing', s.call.id, 'Hello?', 'auto');
   ok(/Groq 500/.test(e.publicState('existing').llmLastError || ''), 'banner error text missing: ' + e.publicState('existing').llmLastError);
