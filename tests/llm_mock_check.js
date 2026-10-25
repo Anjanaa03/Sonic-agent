@@ -8,6 +8,9 @@ const mock = http.createServer((req, res) => {
   let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => {
     lastReq = { auth: req.headers.authorization, body: JSON.parse(b) };
     if (mode === 'fail') { res.writeHead(500); return res.end('boom'); }
+    if (mode === 'json400' && lastReq.body.response_format) { res.writeHead(400); return res.end('{"error":{"message":"json_validate_failed: Failed to generate JSON"}}'); }
+    if (mode === 'badmodel' && lastReq.body.model === 'llama-3.3-70b-versatile') { res.writeHead(404); return res.end('{"error":{"message":"model_not_found"}}'); }
+    if (mode === 'nostate') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ reply: 'Sure, go ahead.' }) } }] })); }
     const out = mode === 'leak'
       ? { reply: 'Sure, Jane lives at Flat 302, Maple Residency, Koramangala.', call_state: { call_type: 'unknown', identity_state: 'unknown', escalate: 'none' } }
       : { reply: 'Thanks, Rahul. I can take a message for Jane. What is it about?', call_state: { call_type: 'unknown', identity_state: 'unknown', caller_name: 'Rahul', purpose: 'Wants to leave a message', urgency: 'routine', escalate: 'none', end_call: false, outcome: 'pending', disclosed: [] } };
@@ -35,8 +38,18 @@ mock.listen(0, async () => {
   r = await e.message('existing', s.call.id, 'What is her address?', 'auto');
   ok(!/Maple|302|Koramangala/.test(r.reply), 'guard did not block a leaking LLM reply');
   ok(e.store('existing').events.some((x) => x.type === 'guard_blocked'), 'guard event missing');
+  mode = 'json400'; // JSON mode rejected: retry without it
+  r = await e.message('existing', s.call.id, 'It is about an invoice', 'auto');
+  ok(r.engine === 'llm', 'should retry without JSON mode and still use the LLM, got ' + r.engine);
+  mode = 'nostate'; // reply without call_state: keep the reply
+  r = await e.message('existing', s.call.id, 'More details on the invoice', 'auto');
+  ok(r.engine === 'llm' && /go ahead/.test(r.reply), 'reply without call_state should still be used');
+  mode = 'badmodel'; // configured model missing: next model is tried
+  r = await e.message('existing', s.call.id, 'Hello again', 'auto');
+  ok(r.engine === 'llm' && lastReq.body.model !== 'llama-3.3-70b-versatile', 'should fall to the next model, used ' + lastReq.body.model);
   mode = 'fail';
   r = await e.message('existing', s.call.id, 'Hello?', 'auto');
+  ok(/Groq 500/.test(e.publicState('existing').llmLastError || ''), 'banner error text missing: ' + e.publicState('existing').llmLastError);
   ok(r.engine === 'rules', 'should fall back to rules on LLM failure');
   ok(e.store('existing').events.some((x) => x.type === 'llm_fallback'), 'fallback event missing');
   console.log(fails.length ? 'FAIL\n - ' + fails.join('\n - ') : 'PASS: Groq path (mock server): request shape, merge, guard on leak, fallback on error');
