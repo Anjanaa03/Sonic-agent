@@ -14,15 +14,26 @@ const KNOWN_COMPANIES = [
 
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 
+// Words that follow "I am" / "I'm" but are not names ("I am running late", "I'm outside").
+const NOT_NAME = new Set(['late', 'busy', 'tired', 'back', 'stuck', 'ready', 'waiting', 'free', 'home', 'there', 'good', 'great', 'well',
+  'okay', 'sorry', 'calling', 'running', 'coming', 'going', 'outside', 'downstairs', 'upstairs', 'near', 'close', 'new', 'old', 'also', 'still',
+  'interested', 'worried', 'concerned', 'looking', 'trying', 'writing', 'asking', 'unable', 'available', 'unwell', 'sick', 'lost', 'here']);
+
 function extractName(text) {
+  // Ordered by reliability. "I am X" is last because it is the most often followed by a non name.
   const pats = [
-    /\b(?:this is|i am|i'm|im|my name is|my name's|it's|its|name's|name is)\s+([a-z]{2,})/i,
+    /\b(?:my name is|my name's|name is|name's)\s+([a-z]{2,})/i,
+    /\b(?:this is|it is|it's|its)\s+([a-z]{2,})/i,
     /^\s*([a-z]{2,})\s+here\b/i,
-    /^\s*(?:hi|hello|hey)[, ]+(?:it's |its |this is )?([a-z]{2,})\s+(?:here|from|calling)\b/i,
+    /^\s*(?:hi|hello|hey)[, ]+([a-z]{2,})\s+(?:here|from|calling)\b/i,
+    /\b(?:i am|i'm|im)\s+([a-z]{2,})/i,
   ];
   for (const p of pats) {
     const m = text.match(p);
-    if (m && !STOP_NAMES.has(m[1].toLowerCase())) return cap(m[1]);
+    if (!m) continue;
+    const w = m[1].toLowerCase();
+    if (STOP_NAMES.has(w) || NOT_NAME.has(w) || /(ing|ed|ly)$/.test(w)) continue;
+    return cap(m[1]);
   }
   return null;
 }
@@ -80,7 +91,7 @@ function intents(raw) {
     pickupWord: has(/(pick ?up|collect|return)/, u),
     deliveryWord: has(/(deliver|parcel|package|drop|consignment|dispatch)/, u),
     scamish: has(/(\bpay\b|payment|customs|duty|redelivery fee|clearance|click|link|card number|cvv|aadhaar|aadhar|\bupi\b|\bkyc\b|account number|pan card|processing fee|transfer money|gift card)/, u),
-    sales: has(/(loan|credit card|insurance|pre.?approved|investment|mutual fund|lottery|prize|cashback|free trial|limited time|special offer|great offer|promotion|discount|scheme|trading tips|you have won|congratulations you)/, u),
+    sales: has(/(loan offer|personal loan|instant loan|loan approval|credit card (offer|limit|upgrade|approval)|insurance (plan|policy|offer)|pre.?approved|investment (plan|scheme|opportunity)|mutual fund|lottery|prize|cashback|free trial|limited time|special offer|great offer|promotion|discount|scheme|trading tips|you have won|congratulations you)/, u),
     refusesPurpose: has(/(none of your business|not telling|won't tell|will not tell|can't tell you|cannot tell you|that's private|its private|it's private|private matter|personal matter|confidential|between me and (her|jane)|just put|just connect|just get|i('ll| will) only (speak|talk)|only (speak|talk) to (jane|her)|not discussing|won't discuss|don't need to (explain|say|tell)|do not need to (explain|say|tell)|why do you need to know|not your concern|not for you)/, u),
     cannotExplain: has(/(can't|cannot|won't be able to|unable to) (explain|say|tell|talk|discuss)|too (long|complicated|sensitive) to explain|can't say on (the )?phone/, u),
     urgentWord: has(/\b(urgent|urgently|asap|immediately|right now|time sensitive|time-sensitive|emergency|critical|can't wait|cannot wait)\b/, u),
@@ -89,7 +100,9 @@ function intents(raw) {
     thanks: has(/^(ok|okay|thanks|thank you|alright|sure|fine|great|cool|got it|noted)[ .!,]*$|^(ok|okay),? (thanks|thank you)/, u),
     yes: has(/^(yes|yeah|yep|yup|sure|ok|okay|correct|right|that's right|it is|affirmative|please do|go ahead|that works|can do|possible|he'?ll|they'll|they will|it'?s fine|fine|allowed)\b/, u),
     no: has(/^(no|nope|nah|not|they (won't|don't|refuse)|can't|cannot|not allowed|negative|they said no)\b/, u),
-    social: has(/(dinner|lunch|brunch|coffee|meet ?up|catch up|drinks|movie|party|hang ?out|get together|free (on|this|tonight|tomorrow|saturday|sunday)|are you free|is jane free|plans)/, u),
+    // an invitation or availability question about an activity, not any mention of one ("running late for the movie" is a message)
+    social: (has(/(dinner|lunch|brunch|coffee|meet ?up|catch up|drinks|movie|party|hang ?out|get together)/, u) && has(/(free|available|join|come|let'?s|can we|want to|wanna|would (she|jane)|will (she|jane)|are you|is jane|plan|invite|should we|shall we|how about|up for)/, u))
+      || has(/(are you free|is jane free|is she free|free (on|this|tonight|tomorrow|saturday|sunday)|any plans)/, u),
     generalContext: has(/(earlier|last time|before|we (discussed|talked|spoke)|that thing|the thing|as discussed|you know|previously|follow(ing)? up|again about|regarding the)/, u),
     vague: has(/^\s*(hi|hello|hey|hello\?|hi there|um+|uh+|hmm+|you know|nothing|just calling|just a call|something|not sure|it's about the thing|its about the thing|about something|never mind|i don't know|idk|yes|yeah|ok|okay)[\s.?!,]*$/, u),
   };
