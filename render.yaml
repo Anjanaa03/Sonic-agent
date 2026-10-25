@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: sonic-agent
+    runtime: node
+    plan: free
+    buildCommand: echo "no build step"
+    startCommand: node src/server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: ACCESS_CODE
+        sync: false

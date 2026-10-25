@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sonic call agent prototype</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mut:#667085;--line:#e4e7ec;--acc:#2f5bea;--ok:#12805c;--warn:#b54708;--bad:#b42318;--r:10px}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:#101828;color:#fff;padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+header h1{font-size:16px;margin:0;font-weight:650}
+.seg{display:flex;border:1px solid #475467;border-radius:8px;overflow:hidden}
+.seg button{background:transparent;color:#d0d5dd;border:0;padding:6px 12px;cursor:pointer;font:inherit}
+.seg button.on{background:#fff;color:#101828;font-weight:600}
+.hbtn{background:#1d2939;color:#fff;border:1px solid #475467;border-radius:8px;padding:6px 10px;cursor:pointer;font:inherit}
+.sim{background:#fffaeb;color:#7a2e0e;border-bottom:1px solid #fedf89;padding:6px 16px;font-size:12.5px}
+main{display:grid;grid-template-columns:minmax(380px,1fr) minmax(420px,1.1fr);gap:14px;padding:14px;max-width:1500px;margin:auto}
+@media(max-width:980px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);margin:0 0 8px}
+select,input[type=text],textarea{width:100%;font:inherit;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
+button{font:inherit}
+.btn{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:7px 12px;cursor:pointer}
+.btn.sec{background:#fff;color:var(--ink);border:1px solid var(--line)}
+.btn.bad{background:var(--bad)}
+.btn.sm{padding:3px 8px;font-size:12px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.hint{font-size:12.5px;color:var(--mut);margin-top:6px}
+#chat{height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:10px;background:#fafbfc;margin:10px 0;display:flex;flex-direction:column;gap:6px}
+.b{max-width:82%;padding:7px 10px;border-radius:12px;white-space:pre-wrap}
+.b.s{background:#eef2ff;align-self:flex-start;border-top-left-radius:3px}
+.b.c{background:#e8f5ef;align-self:flex-end;border-top-right-radius:3px}
+.b.sys{align-self:center;background:#f2f4f7;color:var(--mut);font-size:12.5px}
+.lbl{font-size:11px;color:var(--mut);margin-bottom:2px}
+.pill{display:inline-block;border-radius:999px;padding:1px 9px;font-size:12px;font-weight:600}
+.pill.routine{background:#ecfdf3;color:var(--ok)}.pill.important{background:#fffaeb;color:var(--warn)}.pill.urgent{background:#fef3f2;color:var(--bad)}
+.tabs{display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap}
+.tabs button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 10px;cursor:pointer}
+.tabs button.on{background:#101828;color:#fff;border-color:#101828}
+.n{border:1px solid var(--line);border-left:4px solid var(--ok);border-radius:8px;padding:9px 10px;margin-bottom:8px;background:#fff}
+.n.important{border-left-color:#f79009}.n.urgent{border-left-color:var(--bad);background:#fffbfa}
+.n .t{font-weight:600}
+.n .m{color:var(--mut);font-size:12px}
+.n ul{margin:6px 0 6px 0;padding-left:0;list-style:none}
+.n li{padding:1px 0}
+.next{background:#f2f4f7;border-radius:6px;padding:5px 8px;margin-top:6px}
+.sug{background:#eff4ff;border:1px solid #c7d7fe;border-radius:8px;padding:7px 9px;margin-top:6px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+td,th{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
+.tag{font-size:11px;border-radius:5px;padding:0 6px;background:#f2f4f7;color:var(--mut)}
+.tag.saved{background:#ecfdf3;color:var(--ok)}.tag.inferred{background:#fffaeb;color:var(--warn)}
+pre{white-space:pre-wrap;font-size:12px;background:#f9fafb;border:1px solid var(--line);border-radius:8px;padding:8px;max-height:420px;overflow:auto}
+.sum{border:1px solid var(--line);border-radius:8px;padding:10px;background:#fcfcfd;margin-top:8px}
+.sum div{margin:2px 0}
+.kv{color:var(--mut)}
+label.sw{display:flex;gap:8px;align-items:center;margin:4px 0}
+.sec2{margin-top:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Sonic, your AI call assistant. Test console</h1>
+  <div class="seg" id="seg">
+    <button data-p="new">Window 1: Jane is a NEW user (no context)</button>
+    <button data-p="existing">Window 2: Jane is an EXISTING user</button>
+  </div>
+  <button class="hbtn" id="openOther">Open the other window side by side</button>
+  <span id="engine" class="tag" style="background:#1d2939;color:#fff"></span>
+</header>
+<div class="sim"><b>SIMULATION.</b> Everything here is mock data. No real phone, SMS, OTP, calendar, call transfer or push notification exists. You play the caller; Sonic answers as Jane's assistant. Each window keeps its own separate memory.</div>
+
+<main>
+  <section>
+    <div class="card">
+      <h2>1. Incoming call</h2>
+      <div class="row">
+        <select id="preset" style="flex:2"></select>
+        <input type="text" id="customNum" placeholder="custom number" style="flex:1;display:none">
+        <button class="btn" id="start">Start call</button>
+      </div>
+      <div class="hint" id="presetHint"></div>
+      <div class="hint" id="whoami"></div>
+      <div id="chat"></div>
+      <div class="row">
+        <input type="text" id="msg" placeholder="Type what the caller says, press Enter" style="flex:1" disabled>
+        <button class="btn" id="send" disabled>Send</button>
+        <button class="btn sec" id="end" disabled>Hang up</button>
+      </div>
+      <div class="row hint">
+        <span>Agent engine:</span>
+        <select id="mode" style="width:auto"><option value="auto">Auto (LLM if key set, else rules)</option><option value="rules">Force rule based fallback</option></select>
+        <span id="engineNote"></span>
+      </div>
+      <div id="summaryBox"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <div class="tabs" id="tabs">
+        <button data-t="notif" class="on">2. Jane's notifications</button>
+        <button data-t="mem">Memory and controls</button>
+        <button data-t="ev">Events and metrics</button>
+        <button data-t="prompt">System prompt</button>
+      </div>
+      <div id="tab"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const qs = new URLSearchParams(location.search);
+let PROFILE = qs.get('profile') === 'new' ? 'new' : 'existing';
+let S = null, CALL = null, TAB = 'notif';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Each browser gets a private visitor id, so hosted visitors never share memory.
+let SID = ''; try { SID = localStorage.getItem('sonic_sid') || ''; if (!SID) { SID = Math.random().toString(36).slice(2, 12) + Date.now().toString(36); localStorage.setItem('sonic_sid', SID); } } catch (e) { SID = 'anon' + Math.random().toString(36).slice(2, 8); }
+const api = async (path, body) => {
+  const headers = { 'content-type': 'application/json' };
+  let code = ''; try { code = sessionStorage.getItem('sonic_code') || ''; } catch (e) {}
+  if (code) headers['x-access-code'] = code;
+  const r = await fetch('/api/' + path + (path.includes('?') ? '&' : '?') + 'profile=' + PROFILE + '&sid=' + SID, body ? { method: 'POST', headers, body: JSON.stringify(body) } : { headers });
+  if (r.status === 401) {
+    const c = prompt('Access code required'); if (c) { try { sessionStorage.setItem('sonic_code', c); } catch (e) {} return api(path, body); }
+  }
+  const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j;
+};
+
+async function load() { S = await api('state'); render(); }
+
+function render() {
+  document.querySelectorAll('#seg button').forEach((b) => b.classList.toggle('on', b.dataset.p === PROFILE));
+  $('engine').textContent = S.llmAvailable ? `LLM on: ${S.llmProvider} / ${S.llmModel}` : 'No API key: rule based fallback (not an LLM)';
+  $('engineNote').textContent = S.llmAvailable ? 'Each Sonic bubble is labelled with the engine that wrote it. A rules label while the LLM is on means the model call failed (see Events).' : 'LLM mode needs GROQ_API_KEY (or ANTHROPIC_API_KEY) on the server.';
+  $('whoami').innerHTML = S.kind === 'new'
+    ? '<b>New user:</b> no saved contacts, no history, no topics, every sharing permission OFF. Even Maya, David and Priya are strangers here.'
+    : '<b>Existing user:</b> has contacts (Maya, David, Priya), an apartment search topic, call history and an explicit OTP sharing setting.';
+  const sel = $('preset'); const keep = sel.value;
+  const groups = {};
+  S.presets.forEach((p) => { (groups[p.group] = groups[p.group] || []).push(p); });
+  sel.innerHTML = Object.entries(groups).map(([g, ps]) => `<optgroup label="${esc(g)}">${ps.map((p) => `<option value="${p.id}">${esc(p.label)}${knownLabel(p)}</option>`).join('')}</optgroup>`).join('') + '<optgroup label="Other"><option value="custom">Custom number</option></optgroup>';
+  if (keep) sel.value = keep;
+  presetChanged();
+  renderChat();
+  renderTab();
+}
+function knownLabel(p) { return S.contacts.some((c) => c.number === p.number) ? ' [saved contact]' : ''; }
+function presetChanged() {
+  const v = $('preset').value; const p = S.presets.find((x) => x.id === v);
+  $('customNum').style.display = v === 'custom' ? '' : 'none';
+  $('presetHint').textContent = p ? p.number + '. ' + p.hint : 'Enter any number. Numbers saved as contacts in this window are recognised, others are unknown.';
+}
+function renderChat() {
+  const c = $('chat'); c.innerHTML = '';
+  if (!CALL) { c.innerHTML = '<div class="b sys">Pick a caller and press Start call. Sonic will pick up and speak first.</div>'; return; }
+  CALL.turns.forEach((t) => { const d = document.createElement('div'); d.className = 'b ' + (t.role === 'sonic' ? 's' : 'c'); d.innerHTML = `<div class="lbl">${t.role === 'sonic' ? 'Sonic' + (t.engine ? ' (' + (t.engine === 'llm' ? 'LLM' : 'rules fallback') + ')' : '') : 'Caller (you)'}</div>${esc(t.text)}`; c.appendChild(d); });
+  if (CALL.routed) c.innerHTML = '<div class="b sys">This number is set to ring straight through to Jane. Sonic does not answer (simulated, nothing rings).</div>';
+  else if (CALL.ended) c.insertAdjacentHTML('beforeend', '<div class="b sys">Call ended.</div>');
+  c.scrollTop = c.scrollHeight;
+  const live = CALL && !CALL.ended;
+  $('msg').disabled = !live; $('send').disabled = !live; $('end').disabled = !live;
+  $('summaryBox').innerHTML = CALL && CALL.summary ? summaryHtml(CALL.summary) : '';
+}
+function summaryHtml(s) {
+  return `<div class="sum"><div><b>Call outcome</b> <span class="pill ${s.urgency.level}">${s.urgency.level}</span></div>
+  <div><span class="kv">Who:</span> ${esc(s.who)} (${esc(s.number)})</div>
+  <div><span class="kv">Purpose:</span> ${esc(s.purpose)}</div>
+  <div><span class="kv">Outcome:</span> ${esc(s.outcomeLabel)}</div>
+  ${s.urgency.reason ? `<div><span class="kv">Urgency reason:</span> ${esc(s.urgency.reason)}</div>` : ''}
+  ${s.details.map((d) => `<div>${esc(d)}</div>`).join('')}
+  <div><span class="kv">Next action:</span> ${esc(s.next || 'None')}</div></div>`;
+}
+
+async function startCall() {
+  const v = $('preset').value; let number, label = '', seedRepeats = 0;
+  if (v === 'custom') number = $('customNum').value.trim() || '+91 90000 12345';
+  else { const p = S.presets.find((x) => x.id === v); number = p.number; label = p.label; seedRepeats = p.seedRepeats || 0; }
+  const r = await api('call/start', { number, label, seedRepeats });
+  CALL = r.call; await load(); $('msg').focus();
+}
+async function sendMsg() {
+  const t = $('msg').value.trim(); if (!t || !CALL || CALL.ended) return;
+  $('msg').value = '';
+  CALL.turns.push({ role: 'caller', text: t }); renderChat();
+  $('send').disabled = true;
+  try { const r = await api('call/message', { callId: CALL.id, text: t, mode: $('mode').value }); CALL = r.call; }
+  catch (e) { CALL.turns.push({ role: 'sonic', text: '[error] ' + e.message }); }
+  await load(); if (!CALL.ended) $('msg').focus();
+}
+async function hangUp() { const r = await api('call/end', { callId: CALL.id }); CALL = r.call; await load(); }
+
+/* ---------- right panel ---------- */
+function renderTab() {
+  document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === TAB));
+  if (TAB === 'notif') return renderNotifs();
+  if (TAB === 'mem') return renderMemory();
+  if (TAB === 'ev') return renderEvents();
+  if (TAB === 'prompt') return renderPrompt();
+}
+function renderNotifs() {
+  const list = S.notifications;
+  if (!list.length) { $('tab').innerHTML = '<div class="hint">No notifications yet. They appear here as Sonic would push them to Jane. Routine calls get one short line. Urgent ones appear mid call.</div>'; return; }
+  $('tab').innerHTML = '<div class="hint" style="margin:0 0 8px">SIMULATED push notifications. Nothing is sent to any device.</div>' + list.map((n) => {
+    const fb = n.feedback ? `<div class="m">Feedback: ${esc(n.feedback.type)}${n.feedback.detail ? ' (' + esc(n.feedback.detail) + ')' : ''}</div>` : '';
+    if (n.short && !n.inProgress) return `<div class="n ${n.level}"><div class="t">Routine: ${esc(n.who)}, ${esc(n.purpose)}. ${esc(n.outcomeLabel)}. No action needed.</div>${fb}${feedbackUi(n)}</div>`;
+    return `<div class="n ${n.level}">
+      <div class="row" style="justify-content:space-between"><span class="t">${esc(n.who)}</span><span><span class="pill ${n.urgency.level}">${n.urgency.level}</span> ${n.inProgress ? '<span class="tag">call in progress</span>' : ''} ${n.needsReview ? '<span class="tag inferred">review suggested</span>' : ''}</span></div>
+      <div class="m">${esc(n.number)}. ${esc(n.outcomeLabel)}</div>
+      <div><span class="kv">Purpose:</span> ${esc(n.purpose)}</div>
+      ${n.urgency.reason ? `<div><span class="kv">Urgency:</span> ${esc(n.urgency.reason)}</div>` : ''}
+      <ul>${n.details.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>
+      ${n.next ? `<div class="next"><b>Next:</b> ${esc(n.next)}</div>` : ''}
+      ${n.approval ? approvalUi(n) : ''}
+      ${n.suggestion && !n.inProgress ? `<div class="sug">${esc(n.suggestion.text)} <button class="btn sm" onclick='applyOp(${JSON.stringify(n.suggestion.op).replace(/'/g, '&#39;')})'>Yes, save</button></div>` : ''}
+      ${fb}${n.inProgress ? '' : feedbackUi(n)}
+    </div>`;
+  }).join('');
+}
+function approvalUi(n) {
+  if (n.approval.status === 'pending') return `<div class="next">OTP sharing needs your approval. <button class="btn sm" onclick="decide('${n.id}','approve')">Approve once</button> <button class="btn sm bad" onclick="decide('${n.id}','deny')">Deny</button></div>`;
+  return `<div class="next">Approval ${esc(n.approval.status)}.</div>`;
+}
+function feedbackUi(n) {
+  if (n.feedback) return '';
+  return `<details style="margin-top:6px"><summary class="m" style="cursor:pointer">Was this handled correctly?</summary><div class="row" style="margin-top:6px">
+    <button class="btn sm sec" onclick="fb('${n.id}','correct')">Correct</button>
+    <button class="btn sm sec" onclick="fb('${n.id}','wrong_response')">Wrong response</button>
+    <button class="btn sm sec" onclick="fb('${n.id}','missed_urgency')">Missed urgency</button>
+    <button class="btn sm sec" onclick="fb('${n.id}','dont_handle')">Don't handle this caller automatically</button></div></details>`;
+}
+async function decide(id, d) { await api('approval', { notificationId: id, decision: d }); await load(); }
+async function fb(id, type) {
+  let detail = '';
+  if (type === 'wrong_response') detail = prompt('Optional: what was wrong? (leave empty to skip)') || '';
+  const r = await api('feedback', { notificationId: id, type, detail });
+  if (r.suggestion && confirm(r.suggestion.text + '\n\nSonic will not save this unless you confirm.')) await api('memory', r.suggestion.op);
+  else if (r.note) alert(r.note);
+  await load();
+}
+async function applyOp(op) { await api('memory', op); await load(); }
+
+function renderMemory() {
+  const p = S.permissions;
+  const notesHtml = Object.entries(S.numberNotes).map(([num, arr]) => arr.map((n, i) => `<tr><td>${esc(num)}</td><td>${esc(n.text)} <span class="tag ${n.source}">${n.source}</span></td><td>${n.source === 'inferred' ? `<button class="btn sm sec" onclick='mem({op:"confirm_note",number:${JSON.stringify(num)},index:${i}})'>Confirm</button> ` : ''}<button class="btn sm sec" onclick='mem({op:"delete_note",number:${JSON.stringify(num)},index:${i}})'>Delete</button></td></tr>`).join('')).join('') || '<tr><td colspan="3" class="hint">No notes. Sonic writes only a short purpose and outcome after calls, marked inferred until you confirm.</td></tr>';
+  const flags = Object.entries(S.callerFlags).map(([num, f]) => `<tr><td>${esc(num)}</td><td>${f.important ? '<span class="pill important">important</span> ' : ''}${f.ringThrough ? '<span class="pill urgent">rings through to Jane</span>' : ''}</td><td><button class="btn sm sec" onclick='mem({op:"caller_flag",number:${JSON.stringify(num)},important:false,ringThrough:false})'>Clear</button></td></tr>`).join('') || '<tr><td colspan="3" class="hint">No caller flags.</td></tr>';
+  const known = S.contacts.map((c) => `<tr><td><b>${esc(c.name)}</b> (${esc(c.relationship)})<br><span class="m">${esc(c.number)}</span></td><td><input type="text" value="${esc(c.priority_rule || '')}" placeholder="no priority rule" onchange='mem({op:"edit_contact_rule",id:"${c.id}",rule:this.value})'></td><td><button class="btn sm sec" onclick='mem({op:"remove_contact",id:"${c.id}"})'>Remove</button></td></tr>`).join('') || '<tr><td colspan="3" class="hint">No contacts yet (new user). Sonic offers to save a caller after a call.</td></tr>';
+  const topics = S.topics.map((t) => `<tr><td>${esc(t.label)}</td><td><select onchange='mem({op:"topic_status",id:"${t.id}",status:this.value})'>${['active', 'paused', 'complete', 'not_relevant'].map((s) => `<option ${s === t.status ? 'selected' : ''}>${s}</option>`).join('')}</select></td></tr>`).join('') || '<tr><td colspan="2" class="hint">No topics (new user).</td></tr>';
+  $('tab').innerHTML = `
+  <h2>Sharing permissions (Jane's explicit settings)</h2>
+  <label class="sw"><input type="checkbox" ${p.shareDeliveryOtp ? 'checked' : ''} onchange='mem({op:"set_permission",key:"shareDeliveryOtp",value:this.checked})'> Share delivery OTP with a matched courier</label>
+  <label class="sw"><input type="checkbox" ${p.sharePickupOtp ? 'checked' : ''} onchange='mem({op:"set_permission",key:"sharePickupOtp",value:this.checked})'> Share pickup OTP with a matched pickup agent</label>
+  <div class="hint">Off means Sonic asks Jane for approval through a simulated handoff. Availability sharing is not implemented: Sonic never shares schedule.</div>
+  <div class="sec2"><h2>Topics (latest confirmed status wins)</h2><table>${topics}</table></div>
+  <div class="sec2"><h2>Contacts and priority rules</h2><table>${known}</table></div>
+  <div class="sec2"><h2>Mark a caller</h2><div class="row"><input type="text" id="flagNum" placeholder="number, e.g. +91 90000 00001" style="flex:1"><button class="btn sm" onclick='flagIt({important:true})'>Mark important</button><button class="btn sm sec" onclick='flagIt({ringThrough:true})'>Ring through to me</button></div><table style="margin-top:6px">${flags}</table></div>
+  <div class="sec2"><h2>Notes by number (interaction history)</h2><table>${notesHtml}</table></div>
+  <div class="sec2"><h2>Mock records (read only, simulated)</h2>
+   <div class="hint">Shipments</div><table>${S.shipments.map((s) => `<tr><td>${s.ref}</td><td>${s.company}</td><td>${s.task}</td><td>${s.dest}</td><td>${s.itemClass}</td></tr>`).join('')}</table>
+   <div class="hint" style="margin-top:6px">Mock message store (Sonic never sees a real inbox)</div><table>${S.messages.map((m) => `<tr><td>${esc(m.type)}</td><td>${esc(m.text)}</td></tr>`).join('')}</table></div>
+  <div class="sec2"><button class="btn bad sm" onclick='if(confirm("Reset this window to its starting data?"))mem({op:"reset"})'>Reset this window's memory</button></div>`;
+}
+async function mem(body) { S = await api('memory', body); render(); }
+async function flagIt(o) { const n = $('flagNum').value.trim(); if (!n) return alert('Enter a number'); await mem({ op: 'caller_flag', number: n, ...o }); }
+
+async function renderEvents() {
+  const m = await api('metrics');
+  const ev = S.events.slice().reverse().slice(0, 40);
+  $('tab').innerHTML = `<h2>Mock metrics (this window, this session)</h2>
+  <table>${Object.entries(m).filter(([k]) => k !== 'note').map(([k, v]) => `<tr><td>${esc(k.replace(/_/g, ' '))}</td><td>${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</td></tr>`).join('')}</table>
+  <div class="hint">${esc(m.note)}</div>
+  <div class="sec2"><h2>Structured event log (latest 40)</h2><table>${ev.map((e) => `<tr><td>${new Date(e.t).toLocaleTimeString()}</td><td>${esc(e.type)}</td><td>${esc(JSON.stringify(e.data))}</td></tr>`).join('')}</table></div>`;
+}
+async function renderPrompt() {
+  const t = await (await fetch('/api/prompt')).text();
+  $('tab').innerHTML = `<div class="hint">Exact system prompt sent in LLM mode. The rule fallback implements the same policy without a model.</div><pre>${esc(t)}</pre>`;
+}
+
+/* ---------- wiring ---------- */
+$('start').onclick = startCall; $('send').onclick = sendMsg; $('end').onclick = hangUp;
+$('msg').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMsg(); });
+$('preset').onchange = presetChanged;
+document.querySelectorAll('#seg button').forEach((b) => b.onclick = () => { PROFILE = b.dataset.p; history.replaceState(null, '', '?profile=' + PROFILE); CALL = null; load(); });
+document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => { TAB = b.dataset.t; renderTab(); });
+$('openOther').onclick = () => window.open(location.pathname + '?profile=' + (PROFILE === 'new' ? 'existing' : 'new'), '_blank');
+load();
+</script>
+</body>
+</html>

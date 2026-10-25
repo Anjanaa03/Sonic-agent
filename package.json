@@ -1,0 +1,11 @@
+{
+  "name": "sonic-agent-prototype",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sonic AI call assistant: system prompt and text chat prototype (mock data, zero dependencies)",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node tests/run.js"
+  },
+  "engines": { "node": ">=18" }
+}
