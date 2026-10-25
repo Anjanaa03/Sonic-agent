@@ -105,6 +105,11 @@ function bankOtpAsk(raw) {
   return bank && !explicit;
 }
 
+// "Hi", "Hello?", "Hello, who's this?" : a greeting with no content yet.
+function isGreetingOnly(raw) {
+  return /^\s*((hi+|hello+|hey+|yo|namaste|good (morning|afternoon|evening))[\s,.!?]*(there)?[\s,.!?]*)?(who('?s| is| am i speaking)( this| it| speaking| to)?)?[\s,.!?]*$/i.test(raw) && raw.trim().length > 0;
+}
+
 function extractTimePhrase(raw) {
   const m = raw.match(/\b(asap|as soon as (?:possible|you can)|today|tonight|tomorrow(?: (?:morning|evening|afternoon))?|this (?:morning|afternoon|evening|week)|(?:by|before|after|around|at) (?:\d{1,2}(?::\d{2})?\s?(?:am|pm)?|noon|evening|morning|tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|within [a-z0-9 ]{3,20}|(?:next|on) (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|\d{1,2}(?::\d{2})?\s?(?:am|pm))/i);
   return m ? m[0].trim() : null;
@@ -120,4 +125,4 @@ function shortQuote(raw, n = 220) {
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
 }
 
-module.exports = { extractName, extractRefs, extractCompany, normCompany, intents, bankOtpAsk, extractTimePhrase, extractPhone, shortQuote, KNOWN_COMPANIES };
+module.exports = { extractName, extractRefs, extractCompany, normCompany, intents, bankOtpAsk, isGreetingOnly, extractTimePhrase, extractPhone, shortQuote, KNOWN_COMPANIES };
