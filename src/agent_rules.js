@@ -63,14 +63,37 @@ function rulesTurn(ctxObj, raw, emit) {
   const contact = R.internal.contact;
   const claimed = nlu.extractName(raw);
   const useName = contact && (!claimed || claimed.toLowerCase() === contact.name.toLowerCase());
-  const intro = useName ? `Hi ${contact.name}, this is Jane's assistant. ` : "Hi, I'm Jane's assistant. ";
+  const introName = useName ? contact.name : claimed; // a name the caller gives is used from the first reply on
+  const intro = introName ? `Hi ${introName}, ${useName ? 'this is' : "I'm"} Jane's assistant. ` : "Hi, I'm Jane's assistant. ";
   if (first && nlu.isGreetingOnly(raw)) {
     fl.introduced = true;
     if (contact) { st.call_type = 'known'; st.identity_state = 'identified'; return intro + 'How can I help?'; }
     return intro + "Who's calling, please?";
   }
-  const reply = rulesTurnCore(ctxObj, raw, emit);
-  if (first && !fl.urgentMode) { fl.introduced = true; return intro + reply; }
+  let reply = rulesTurnCore(ctxObj, raw, emit);
+  if (first && !fl.urgentMode) {
+    fl.introduced = true;
+    if (introName) { fl.nameUses = 1; reply = reply.replace(/^Thanks(, [A-Za-z]+)?\.\s+/, ''); } // the intro already thanked and named them
+    return intro + reply;
+  }
+  const nameNow = st.caller_name || (contact && !fl.nameMismatch ? contact.name : null);
+  return personalize(reply, nameNow, fl, st);
+}
+
+// Uses the caller's name in later replies, naturally: in the closing, and once mid conversation. Never in every sentence.
+function personalize(reply, name, fl, st) {
+  if (!name) return reply;
+  if (new RegExp('\\b' + name + '\\b', 'i').test(reply)) { fl.nameUses = 1; return reply; }
+  if (/Thanks for calling\.$/.test(reply)) return reply.replace(/Thanks for calling\.$/, `Thanks for calling, ${name}.`);
+  if (st.end_call) {
+    if (/Goodbye\.$/.test(reply)) return reply.replace(/Goodbye\.$/, `Goodbye, ${name}.`);
+    if (/^Thank you, goodbye\.$/i.test(reply)) return `Thank you, ${name}. Goodbye.`;
+    return reply;
+  }
+  if (!fl.nameUses) {
+    const m = reply.match(/^((?:Thanks|Thank you|Got it|Understood|Noted)[^.?!]{0,50})([.!])/);
+    if (m) { fl.nameUses = 1; return reply.replace(m[0], `${m[1]}, ${name}${m[2]}`); }
+  }
   return reply;
 }
 
@@ -103,7 +126,8 @@ function rulesTurnCore(ctxObj, raw, emit) {
   const refs = nlu.extractRefs(raw);
   if (!['delivery', 'pickup'].includes(st.call_type)) {
     const known = nlu.KNOWN_COMPANIES.some((c) => c.re.test(raw));
-    if (refs.length || known || (I.courierish && !contact && (I.deliveryWord || I.pickupWord))) {
+    const courierWords = /(courier|parcel|package|deliver|delivery|shipment|pick ?up|awb|consignment|dispatch|delivery partner|\brider\b)/i.test(raw);
+    if (refs.length || known || (!contact && courierWords)) {
       st.call_type = I.pickupWord && !/deliver/i.test(raw) ? 'pickup' : 'delivery';
     } else if (contact) st.call_type = 'known';
     else if (!I.vague) st.call_type = 'unknown';
@@ -312,6 +336,8 @@ function rulesTurnCore(ctxObj, raw, emit) {
         return pre + lead + ask("Without a reference I can't check anything. Could I take your number for Jane?");
       }
       if (sm.status === 'ref_not_found') return pre + lead + ask("I can't match that reference. Could you read it out again?");
+      // Couriers and pickup agents need details, not a reply. First ask how Sonic can help, then company and reference.
+      if (!fl.needs.length && !fl.askedHelp && sm.status === 'none') { fl.askedHelp = true; return pre + lead + ask('How can I help you with the delivery or pickup?'); }
       if (!st.company) return pre + lead + ask('Which company are you with?');
       return pre + lead + ask("What's the shipment reference number?");
     }
@@ -326,7 +352,7 @@ function rulesTurnCore(ctxObj, raw, emit) {
 
     if (!need) {
       if (I.thanks || I.done) return close(pre + 'Thank you, goodbye.', st.issue || st.proposed_slots.length || st.needs_jane_approval ? 'pending' : 'resolved');
-      return pre + ask('Thanks, I have that shipment. What do you need?');
+      return pre + ask('Thanks, I have that shipment. How can I help?');
     }
     switch (need) {
       case 'otp': {
@@ -420,31 +446,17 @@ function rulesTurnCore(ctxObj, raw, emit) {
     if (fl.nameMismatch && !st.purpose && !fl.stage) {
       return pre + ask("Thanks. I can't confirm who's on this line, so I'll just take a message. What would you like me to pass on?");
     }
-    // stages
-    if (fl.stage === 'await_urgency') {
-      fl.stage = 'await_anything_else';
-      if (I.urgentWord) esc(ident ? 'important' : 'important', 'Caller says it is urgent. Not independently verified.');
-      else if (/(later|no rush|not urgent|whenever|no hurry|can wait|no)/i.test(raw)) { /* routine */ }
-      const t = nlu.extractTimePhrase(raw); if (t) st.callback_time = t;
-      return pre + ask('Got it. Anything else you would like me to add?');
-    }
-    if (fl.stage === 'await_anything_else') {
-      if (!(I.done || I.no || I.thanks)) appendMsg(st, raw);
-      return close(pre + `Thanks${ident ? ' ' + nm : ''}, I'll pass it all on to Jane. Goodbye.`, 'message_captured');
-    }
-    if (fl.stage === 'await_context') {
-      fl.stage = null;
-      appendMsg(st, raw);
-      return pre + ask('Thanks. Is it urgent, or can Jane reply later?') && (fl.stage = 'await_urgency', pre + 'Thanks. Is it urgent, or is it fine for Jane to reply later?');
-    }
+    // Known contacts are never asked when they want a reply or how urgent it is.
+    // Once Sonic has the message it closes: Jane replies as soon as she receives it.
+    const KNOWN_CLOSE = 'Jane will reply as soon as she receives your message. Thanks for calling.';
 
     // contact context retrieval (only for identified callers)
     const lc = raw.toLowerCase();
     const ctxHit = contact.context.find((c) => c.keywords.some((k) => new RegExp('\\b' + k + '\\b', 'i').test(lc)));
     if (ctxHit && ident && !fl.nameMismatch) {
       setPurpose('About earlier conversation: ' + ctxHit.text);
-      appendMsg(st, raw); fl.stage = 'await_urgency';
-      return pre + ask(`I have a note about ${ctxHit.ack}. Is it urgent, or can Jane reply later?`);
+      appendMsg(st, raw);
+      return close(pre + `I have a note about ${ctxHit.ack}. I'll pass this on. ` + KNOWN_CLOSE, 'message_captured');
     }
     if (I.generalContext && !fl.contextAsked && !ctxHit) {
       fl.contextAsked = true; appendMsg(st, raw);
@@ -453,39 +465,38 @@ function rulesTurnCore(ctxObj, raw, emit) {
     if (I.social) {
       setPurpose(`${nm} asked about plans: ${nlu.shortQuote(cleaned || raw, 120)}`);
       appendMsg(st, raw);
-      const t = nlu.extractTimePhrase(raw);
-      if (t) st.callback_time = st.callback_time || null;
       st.commitments = [];
-      if (t) { fl.stage = 'await_anything_else'; return pre + `${hi}I can't see Jane's calendar, so I can't confirm. I'll pass this on. Anything else to add?`; }
-      return pre + ask(`${hi}I can't see Jane's calendar, so I can't confirm her availability. What day and time were you thinking?`);
+      const hasDay = /\b((mon|tues|wednes|thurs|fri|satur|sun)day|tomorrow|tonight|today|this weekend)\b/i.test(raw);
+      const hasTime = /(\d{1,2}(:\d{2})?\s?(am|pm)|\bnoon\b|\bevening\b|\bmorning\b|\bafternoon\b|\bnight\b)/i.test(raw);
+      const noCal = "I can't see Jane's calendar, so I can't confirm her availability. ";
+      if (hasDay && hasTime) return close(pre + noCal + "I'll pass this on. " + KNOWN_CLOSE, 'message_captured');
+      if (hasDay) return pre + noCal + ask('What time were you thinking?');
+      return pre + noCal + ask('What day and time were you thinking?');
     }
-    // plan details follow up (purpose is social and we asked day/time)
-    if (st.purpose && /asked about plans/.test(st.purpose) && !fl.stage) {
-      appendMsg(st, raw); fl.stage = 'await_anything_else';
-      return pre + ask("Got it, I'll pass that to Jane so she can reply. Anything else you'd like to add?");
+    // plan details follow up (purpose is social and we asked for day or time)
+    if (st.purpose && /asked about plans/.test(st.purpose)) {
+      appendMsg(st, raw);
+      return close(pre + "Got it, I'll pass that to Jane. " + KNOWN_CLOSE, 'message_captured');
     }
     // plain message
     if (!cleaned || I.vague) {
       fl.clarifyAsks++;
       if (fl.clarifyAsks > 1) { st.outcome = 'no_purpose'; return close(pre + `I'll let Jane know you called${ident ? ', ' + nm : ''}. Goodbye.`, 'no_purpose'); }
-      return pre + ask(`${hi}What would you like me to pass on to Jane?`);
+      return pre + ask(`${hi}What can I pass on to Jane?`);
     }
     setPurpose(nlu.shortQuote(cleaned, 140));
     appendMsg(st, raw);
     const t = nlu.extractTimePhrase(raw); if (t) st.callback_time = t;
     const prio = contact.priority_rule && /urgent/i.test(contact.priority_rule);
     if (I.urgentWord) {
-      if (prio && ident) {
-        esc('urgent', `${nm} (${contact.relationship}) says it is urgent. Priority rule applied.`); st.outcome = 'escalated';
-        fl.stage = 'await_anything_else';
-        return pre + "Understood, I've marked it urgent and alerted Jane. Is there anything else I should add?";
+      if (prio && !fl.nameMismatch) {
+        esc('urgent', `${nm} (${contact.relationship}) says it is urgent. Priority rule applied.`);
+        return close(pre + "Understood, I've marked it urgent and alerted Jane. She'll reply as soon as she sees it. Thanks for calling.", 'escalated');
       }
       esc('important', 'Caller says it is urgent. Not independently verified.');
-      fl.stage = 'await_anything_else';
-      return pre + "Understood, I've flagged it as time sensitive for Jane. Anything else you'd like me to add?";
+      return close(pre + "Understood, I've flagged it as time sensitive. " + KNOWN_CLOSE, 'message_captured');
     }
-    fl.stage = 'await_urgency';
-    return pre + ask(`${hi}Is it urgent, or is it fine for Jane to reply later?`);
+    return close(pre + "Got it, I'll pass that on. " + KNOWN_CLOSE, 'message_captured');
   }
 
   // ------------------------------------------------------------------
@@ -495,7 +506,7 @@ function rulesTurnCore(ctxObj, raw, emit) {
     if (repeats >= 3 && !fl.repeatAcked) { fl.repeatAcked = true; rep = "I see you've called a few times, sorry about that. "; }
     const nm = st.caller_name;
     const cleaned = raw.replace(/\b(hi|hello|hey|good (morning|afternoon|evening))\b[,!. ]*/ig, '')
-      .replace(/\b(this is|it's|its|i am|i'm|my name is)\s+[a-z]+\b/ig, '').replace(/^[\s,.\-]+/, '').trim();
+      .replace(/\b(this is|it's|its|i am|i'm|my name is)\s+(?!calling|from|here|just|looking|trying|a\b|an\b|the\b|not\b|about)[a-z]+\b/ig, '').replace(/^[\s,.\-]+/, '').trim();
     const words = cleaned.split(/\s+/).filter(Boolean).length;
 
     if (I.asksWhereabouts && !I.asksLocation && !I.asksAddress) {
@@ -554,17 +565,27 @@ function rulesTurnCore(ctxObj, raw, emit) {
       fl.contextConfirmed = false;
       st.notes_for_jane.push('Caller details did not match the earlier note, treated as a new matter');
       fl.stage = 'await_urgency';
-      return pre + ask("Thanks, I'll treat that as a new matter. How urgent is it, and when would you like a reply?");
+      return pre + ask("Thanks, I'll treat that as a new matter. When would you like a reply?");
+    }
+    // Order for unknown callers: why they are calling, then details (once, if thin), and only then the reply timing.
+    if (fl.stage === 'await_details') {
+      appendMsg(st, raw);
+      const t2 = nlu.extractTimePhrase(raw); if (t2) st.callback_time = t2;
+      if (I.urgentWord) esc('important', 'Caller says it is urgent. Not independently verified.');
+      if (t2 || I.urgentWord) { fl.stage = null; return close(pre + `Thank you${nm ? ', ' + nm : ''}. I'll pass this on to Jane. Goodbye.`, 'message_captured'); }
+      fl.stage = 'await_urgency';
+      return pre + ask('Thanks, that helps. When would you like a reply?');
     }
     if (fl.stage === 'await_urgency') {
-      fl.stage = 'await_anything_else';
-      const t = nlu.extractTimePhrase(raw); if (t) st.callback_time = t;
+      fl.stage = null;
+      const t2 = nlu.extractTimePhrase(raw); if (t2) st.callback_time = t2;
+      else if (!(I.done || I.no || I.thanks)) st.callback_time = nlu.shortQuote(raw, 80);
       if (I.urgentWord) esc('important', 'Caller says it is urgent. Not independently verified.');
-      return pre + ask('Is there a specific question Jane needs to answer, or anything else to pass on?');
+      return close(pre + `Thank you${nm ? ', ' + nm : ''}. I'll pass this on to Jane. Goodbye.`, 'message_captured');
     }
     if (fl.stage === 'await_anything_else') {
       if (!(I.done || I.no || I.thanks)) appendMsg(st, raw);
-      return close(pre + `Thank you${nm ? ' ' + nm : ''}, I'll pass this on to Jane. Goodbye.`, 'message_captured');
+      return close(pre + `Thank you${nm ? ', ' + nm : ''}. I'll pass this on to Jane. Goodbye.`, 'message_captured');
     }
 
     // first substantive input
@@ -600,9 +621,10 @@ function rulesTurnCore(ctxObj, raw, emit) {
       fl.stage = 'await_anything_else';
       return pre + rep + ask("I can't speak to Jane's availability for that, but I'll pass your message on. Is there anything else to add?");
     }
-    if (!t && !I.urgentWord) { fl.stage = 'await_urgency'; return pre + rep + ask('Thanks. How urgent is it, and when would you like a reply?'); }
-    fl.stage = 'await_anything_else';
-    return pre + rep + ask('Is there a specific question Jane needs to answer, or anything else to pass on?');
+    const enough = words >= 9 || t || I.urgentWord;
+    if (!enough) { fl.stage = 'await_details'; return pre + rep + ask('Thanks. Could you share a few more details, so I can pass it on properly?'); }
+    if (!t) { fl.stage = 'await_urgency'; return pre + rep + ask('Thanks, that helps. When would you like a reply?'); }
+    return close(pre + rep + `Thank you${nm ? ', ' + nm : ''}. I'll pass this on to Jane. Goodbye.`, 'message_captured');
   }
 }
 
