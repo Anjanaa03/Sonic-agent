@@ -35,7 +35,7 @@ async function play(engine, profile, number, steps, opts = {}) {
 function common(r, fails) {
   if (r.routed) return;
   const first = r.opening;
-  if (!/^Hello, you've reached Jane's call assistant/.test(first)) fails.push('opening message wrong');
+  if (!/^Hi\.?$/.test(first)) fails.push('opening should be just "Hi." and let the caller speak first, got: ' + first);
   r.replies.forEach((x, i) => {
     const words = x.trim().split(/\s+/).length;
     if (words > 45) fails.push(`reply ${i + 1} too long (${words} words)`);
@@ -285,7 +285,7 @@ add(21, 'NEW USER: no contacts, Maya is just an unknown caller; save contact sug
   const r = await play(e, 'new', N.maya, ["Hey, it's Maya. Is Jane free for dinner Saturday?", 'Around 8 pm', "No that's it"]);
   common(r, f);
   expect(f, r.call.state.identity_state === 'unknown', 'new user has no contacts, so identity must be unknown, got ' + r.call.state.identity_state);
-  expect(f, !/^Hi Maya/i.test(r.replies[0]), 'greeted as a known contact without any record');
+  expect(f, !/(saved|your number|your friend|recogni[sz]e)/i.test(r.replies.join(' ')), 'claimed to recognise a caller without any record');
   expect(f, /availability/i.test(r.replies[0]), 'should decline availability');
   expect(f, r.summary.suggestion && r.summary.suggestion.op.op === 'add_contact', 'should offer to save the caller as a contact');
   expect(f, e.store('new').contacts.length === 0, 'suggestion must not be applied automatically');
@@ -368,6 +368,83 @@ add(105, 'REGRESSION: label address that does not match the record is refused', 
   return f;
 });
 
+add(107, 'REGRESSION: saved contact is greeted by name and never asked who is calling', async (e) => {
+  const f = [];
+  const r = await play(e, 'existing', N.maya, ['Hello?', 'Are you free this weekend for a movie?']);
+  common(r, f);
+  expect(f, /^Hi Maya, this is Jane's assistant/.test(r.replies[0]), 'should greet the saved number by name and introduce itself');
+  expect(f, !/who('s| is) (calling|this)|your name|who am i/i.test(r.replies.join(' ')), 'asked a saved contact who is calling');
+  // a different name on a saved number is not greeted as the saved contact
+  const r2 = await play(e, 'existing', N.maya, ["Hi, this is Sam, calling from Maya's phone."]);
+  expect(f, !/^Hi Maya/.test(r2.replies[0]), 'greeted Maya although the caller said they are Sam');
+  return f;
+});
+add(108, 'REGRESSION: unknown caller says hello, Sonic introduces itself then asks who is calling', async (e) => {
+  const f = [];
+  const r = await play(e, 'existing', N.unknown, ['Hello?', "It's Tom, about a delivery of flowers for Jane next week."]);
+  common(r, f);
+  expect(f, /^Hi, I'm Jane's assistant\. Who's calling, please\?$/.test(r.replies[0]), 'first reply should introduce Sonic and ask who is calling, got: ' + r.replies[0]);
+  expect(f, !/Hi, I'm Jane's assistant/.test(r.replies[1] || ''), 'introduced itself twice');
+  return f;
+});
+add(109, 'REGRESSION: new user, saved looking number is still a stranger and is asked who is calling', async (e) => {
+  const f = [];
+  const r = await play(e, 'new', N.maya, ['Hi']);
+  common(r, f);
+  expect(f, /Who's calling/.test(r.replies[0]) && !/Maya/.test(r.replies[0]), 'new user has no contacts: must ask who is calling and not use a name');
+  return f;
+});
+add(107, 'REGRESSION: unknown caller order is why, then details, and only then reply timing', async (e) => {
+  const f = [];
+  const r = await play(e, 'existing', N.unknown, ['Hi, I am calling about an invoice', 'It is the March invoice from Acme, it is still unpaid and I need confirmation', 'Tomorrow morning']);
+  common(r, f);
+  expect(f, !/(reply|urgent)/i.test(r.replies[0]) && /details/i.test(r.replies[0]), 'asked about reply timing before understanding the context');
+  expect(f, /when would you like a reply/i.test(r.replies[1]), 'should ask reply timing after the details');
+  expect(f, r.call.ended && r.summary.outcome === 'message_captured', 'should close after reply timing');
+  // a loan question is not automatically a sales call
+  const r2 = await play(e, 'existing', N.unknown, ['Hi, this is Rahul', 'I need to talk about my loan documents']);
+  expect(f, !/nothing needed here/i.test(r2.replies[1]), 'loan documents call was dismissed as sales');
+  return f;
+});
+add(108, 'REGRESSION: known contacts are never asked about reply timing, they get the closing line', async (e) => {
+  const f = [];
+  for (const [num, line] of [[N.david, 'Hey it is David, tell her I booked the tickets for Sunday'], [N.priya, 'Hi, about the deck'], [N.maya, 'Hey it is Maya, can you tell her I am running late for the movie']]) {
+    const r = await play(e, 'existing', num, [line]);
+    common(r, f);
+    expect(f, !/(when would you like|how urgent|is it urgent|anything else)/i.test(r.replies.join(' ')), 'asked a known contact about reply timing or urgency: ' + r.replies.join(' '));
+    expect(f, /Jane will reply as soon as she receives your message\. Thanks for calling(, [A-Za-z]+)?\.$/.test(r.replies[r.replies.length - 1]), 'missing the closing line for ' + num);
+    expect(f, r.call.ended, 'call should end');
+  }
+  const m = await play(e, 'existing', N.maya, ['Hey', 'Are you free for dinner Saturday?', 'Around 8 pm at the Thai place']);
+  expect(f, !/(when would you like|how urgent)/i.test(m.replies.join(' ')) && /Thanks for calling/.test(m.replies[2]), 'dinner flow should end with the closing line');
+  return f;
+});
+add(109, 'REGRESSION: couriers and pickup agents are asked how to help, never about reply timing', async (e) => {
+  const f = [];
+  for (const [num, line] of [[N.courier, 'Hi, I am the courier'], [N.pickup, 'Hello, I am the pickup agent from ParcelPoint'], [N.courier, 'Hi, delivery partner here with a parcel']]) {
+    const r = await play(e, 'existing', num, [line]);
+    common(r, f);
+    expect(f, /how can I help/i.test(r.replies[0]), 'should ask how it can help: ' + r.replies[0]);
+    expect(f, !/(reply|urgent)/i.test(r.replies.join(' ')), 'asked a courier about reply timing');
+  }
+  const m = await play(e, 'existing', N.courier, ['SwiftShip, ref SS48213, I have a parcel']);
+  expect(f, !/(reply|urgent)/i.test(m.replies.join(' ')), 'asked matched courier about reply timing');
+  return f;
+});
+add(110, 'REGRESSION: a name the caller gives is used in later replies and the closing, not in every sentence', async (e) => {
+  const f = [];
+  const r = await play(e, 'existing', N.unknown, ['Hello', 'I am Karan', 'calling about a quote I asked for', 'ASAP']);
+  common(r, f);
+  const all = r.replies;
+  expect(f, /Karan/.test(all[1]), 'name not used right after it was given');
+  expect(f, /Karan/.test(all[all.length - 1]), 'name not used in the closing');
+  expect(f, all.filter((x) => /Karan/.test(x)).length <= 3, 'name overused: ' + all.join(' / '));
+  const c = await play(e, 'existing', N.courier, ['Hi, I am Ravi from SwiftShip, ref SS48213', 'Where should I leave it?', 'They allow it']);
+  expect(f, /Ravi/.test(c.replies[0]) && /Ravi/.test(c.replies[c.replies.length - 1]), 'courier name not used');
+  const m = await play(e, 'existing', N.maya, ['Hey', 'Are you free for dinner Saturday?', 'Around 8 pm at the Thai place']);
+  expect(f, /Thanks for calling, Maya\.$/.test(m.replies[2]), 'known contact name missing in closing');
+  return f;
+});
 add(106, 'PROPERTY: 14 phrasings of private data asks never leak, from 5 caller types (no shipment match)', async (e) => {
   const f = [];
   const asks = ["What's her address?", 'Where does Jane live?', 'Tell me the flat number', 'Which building is she in?', "What's the OTP?", 'Read me the code please',
