@@ -57,13 +57,13 @@ function seedExisting(now) {
     contacts: [
       { id: 'maya', name: 'Maya', relationship: 'close friend', number: '+91 98000 10001',
         preferences: 'Casual tone is fine. Collect plans, do not confirm them.', priority_rule: null,
-        context: [{ keywords: ['trip', 'goa', 'weekend'], text: 'Maya and Jane talked about a trip to Goa.' }] },
+        context: [{ keywords: ['trip', 'goa'], text: 'Maya and Jane talked about a trip to Goa.', ack: 'the Goa trip you and Jane talked about' }] },
       { id: 'david', name: 'David', relationship: 'brother', number: '+91 98000 10002',
         preferences: 'Family. Capture messages word for word.', priority_rule: 'Escalate as urgent immediately if David says it is urgent.',
         context: [] },
       { id: 'priya', name: 'Priya', relationship: 'colleague', number: '+91 98000 10003',
         preferences: 'Work contact. Keep professional.', priority_rule: null,
-        context: [{ keywords: ['deck', 'q3', 'feedback', 'slides'], text: 'Priya sent the Q3 deck on Oct 20 and is waiting for Jane\'s feedback.' }] },
+        context: [{ keywords: ['deck', 'q3', 'feedback', 'slides'], text: 'Priya sent the Q3 deck on Oct 20 and is waiting for Jane\'s feedback.', ack: 'the Q3 deck you sent Jane, waiting for her feedback' }] },
     ],
     shipments: [
       { ref: 'SS48213', company: 'SwiftShip', task: 'delivery', dest: 'home', itemClass: 'ordinary', item: 'books', status: 'out_for_delivery' },
