@@ -8,7 +8,8 @@ const ORDER = { none: 0, important: 1, urgent: 2 };
 const maxEsc = (a, b) => (ORDER[a] >= ORDER[b] ? a : b);
 const STOP = new Set(['the', 'and', 'for', 'that', 'this', 'with', 'about', 'have', 'from', 'your', 'you', 'was', 'were', 'what', 'which', 'about', 'there', 'their', 'call', 'calling', 'regarding', 'listing', 'earlier', 'discussed', 'talked']);
 
-const OPENING = "Hello, you've reached Jane's call assistant. May I know who's calling and what this is regarding?";
+// Like a person picking up: just "Hi" and let the caller speak first. The introduction comes with the first reply.
+const OPENING = 'Hi.';
 
 function newState() {
   return {
@@ -53,7 +54,27 @@ function absorb(call, raw, store) {
   return I;
 }
 
+// Wrapper: Sonic says "Hi." first, the caller speaks, then Sonic introduces itself in its first reply.
+// A saved number is greeted by name and never asked "who is calling". Caller ID is not treated as proof.
 function rulesTurn(ctxObj, raw, emit) {
+  const { call, store, R } = ctxObj;
+  const fl = call.flags, st = call.state;
+  const first = call.turns.filter((t) => t.role === 'caller').length === 1 && !fl.introduced;
+  const contact = R.internal.contact;
+  const claimed = nlu.extractName(raw);
+  const useName = contact && (!claimed || claimed.toLowerCase() === contact.name.toLowerCase());
+  const intro = useName ? `Hi ${contact.name}, this is Jane's assistant. ` : "Hi, I'm Jane's assistant. ";
+  if (first && nlu.isGreetingOnly(raw)) {
+    fl.introduced = true;
+    if (contact) { st.call_type = 'known'; st.identity_state = 'identified'; return intro + 'How can I help?'; }
+    return intro + "Who's calling, please?";
+  }
+  const reply = rulesTurnCore(ctxObj, raw, emit);
+  if (first && !fl.urgentMode) { fl.introduced = true; return intro + reply; }
+  return reply;
+}
+
+function rulesTurnCore(ctxObj, raw, emit) {
   const { call, store, R } = ctxObj;
   const st = call.state, fl = call.flags;
   const I = absorb(call, raw, store);
@@ -95,7 +116,7 @@ function rulesTurn(ctxObj, raw, emit) {
   if (contact && nameClaim) {
     if (nameClaim.toLowerCase() === contact.name.toLowerCase()) st.identity_state = 'identified';
     else { st.identity_state = 'probable'; fl.nameMismatch = true; }
-  } else if (contact) st.identity_state = 'probable';
+  } else if (contact) st.identity_state = 'identified'; // saved number, nothing contradicts it. Still never unlocks private data.
   else if (claimsContact) { fl.claimsKnown = claimsContact.name; st.identity_state = 'unknown'; }
   if (ctype === 'delivery' || ctype === 'pickup') {
     if (sm.status === 'matched') { st.identity_state = 'identified'; st.shipment_ref = sm.shipment.ref; }
@@ -379,7 +400,7 @@ function rulesTurn(ctxObj, raw, emit) {
     const pre = calmPrefix();
     const nm = contact.name;
     const ident = st.identity_state === 'identified';
-    const hi = ident ? `Hi ${nm}. ` : '';
+    const hi = ''; // the greeting by name happens once, in the first reply
     const cleaned = raw.replace(/\b(hi|hello|hey)\b[,!. ]*/ig, '').replace(/\b(this is|it's|its|i am|i'm)\s+\w+\b/ig, '').trim();
 
     if (fl.nameMismatch && !fl.mismatchNoted) {
@@ -420,10 +441,10 @@ function rulesTurn(ctxObj, raw, emit) {
     // contact context retrieval (only for identified callers)
     const lc = raw.toLowerCase();
     const ctxHit = contact.context.find((c) => c.keywords.some((k) => new RegExp('\\b' + k + '\\b', 'i').test(lc)));
-    if (ctxHit && ident) {
+    if (ctxHit && ident && !fl.nameMismatch) {
       setPurpose('About earlier conversation: ' + ctxHit.text);
       appendMsg(st, raw); fl.stage = 'await_urgency';
-      return pre + `${hi}I have a note: ${ctxHit.text.replace(contact.name + ' ', 'you ').replace(/Jane's/g, "Jane's")} Is it urgent, or can Jane reply later?`.replace(/^Hi (\w+)\. I have a note: (.*)$/, 'Hi $1. I have a note about that. $2');
+      return pre + ask(`I have a note about ${ctxHit.ack}. Is it urgent, or can Jane reply later?`);
     }
     if (I.generalContext && !fl.contextAsked && !ctxHit) {
       fl.contextAsked = true; appendMsg(st, raw);
