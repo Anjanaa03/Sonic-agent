@@ -15,8 +15,24 @@ header h1{font-size:16px;margin:0;font-weight:650}
 .seg button.on{background:#fff;color:#101828;font-weight:600}
 .hbtn{background:#1d2939;color:#fff;border:1px solid #475467;border-radius:8px;padding:6px 10px;cursor:pointer;font:inherit}
 .sim{background:#fffaeb;color:#7a2e0e;border-bottom:1px solid #fedf89;padding:6px 16px;font-size:12.5px}
-main{display:grid;grid-template-columns:minmax(380px,1fr) minmax(420px,1.1fr);gap:14px;padding:14px;max-width:1500px;margin:auto}
-@media(max-width:980px){main{grid-template-columns:1fr}}
+main{display:block;padding:14px;max-width:860px;margin:auto}
+.tools{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
+.cnt{display:inline-block;min-width:18px;padding:0 6px;border-radius:999px;background:#475467;color:#fff;font-size:11px;text-align:center}
+.cnt.hot{background:#f04438;animation:pulse 1.1s infinite}
+@keyframes pulse{50%{opacity:.45}}
+.llm{padding:10px 16px;font-weight:700;font-size:14.5px;letter-spacing:.01em}
+.llm.on{background:#067647;color:#fff}
+.llm.warn{background:#b54708;color:#fff}
+.llm.off{background:#475467;color:#fff}
+.llm .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#7cffb2;margin-right:8px;box-shadow:0 0 0 0 #7cffb2;animation:ring 1.6s infinite}
+@keyframes ring{70%{box-shadow:0 0 0 8px rgba(124,255,178,0)}100%{box-shadow:0 0 0 0 rgba(124,255,178,0)}}
+.llm small{font-weight:500;opacity:.92}
+.backdrop{position:fixed;inset:0;background:rgba(16,24,40,.35);display:none;z-index:40}
+.backdrop.open{display:block}
+.drawer{position:fixed;top:0;right:0;height:100vh;width:min(540px,100vw);background:#fff;border-left:1px solid var(--line);box-shadow:-8px 0 24px rgba(16,24,40,.18);transform:translateX(105%);transition:transform .2s;z-index:50;display:flex;flex-direction:column}
+.drawer.open{transform:none}
+.dhead{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}
+.dbody{padding:12px 14px;overflow:auto;flex:1}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px}
 h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);margin:0 0 8px}
 select,input[type=text],textarea{width:100%;font:inherit;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
@@ -63,18 +79,22 @@ label.sw{display:flex;gap:8px;align-items:center;margin:4px 0}
 <header>
   <h1>Sonic, your AI call assistant. Test console</h1>
   <div class="seg" id="seg">
-    <button data-p="new">Window 1: Jane is a NEW user (no context)</button>
-    <button data-p="existing">Window 2: Jane is an EXISTING user</button>
+    <button data-p="new">New user (no context)</button>
+    <button data-p="existing">Old user (with context)</button>
   </div>
-  <button class="hbtn" id="openOther">Open the other window side by side</button>
-  <span id="engine" class="tag" style="background:#1d2939;color:#fff"></span>
+  <div class="tools">
+    <button class="hbtn" id="bNotif" data-t="notif">Jane's notifications <span id="nCount" class="cnt" style="display:none"></span></button>
+    <button class="hbtn" data-t="mem">Memory and controls</button>
+    <button class="hbtn" data-t="ev">Events and metrics</button>
+  </div>
 </header>
+<div id="llmBanner" class="llm off">Checking LLM connection...</div>
 <div class="sim"><b>SIMULATION.</b> Everything here is mock data. No real phone, SMS, OTP, calendar, call transfer or push notification exists. You play the caller; Sonic answers as Jane's assistant. Each window keeps its own separate memory.</div>
 
 <main>
   <section>
     <div class="card">
-      <h2>1. Incoming call</h2>
+      <h2>Incoming call</h2>
       <div class="row">
         <select id="preset" style="flex:2"></select>
         <input type="text" id="customNum" placeholder="custom number" style="flex:1;display:none">
@@ -97,18 +117,13 @@ label.sw{display:flex;gap:8px;align-items:center;margin:4px 0}
     </div>
   </section>
 
-  <section>
-    <div class="card">
-      <div class="tabs" id="tabs">
-        <button data-t="notif" class="on">2. Jane's notifications</button>
-        <button data-t="mem">Memory and controls</button>
-        <button data-t="ev">Events and metrics</button>
-        <button data-t="prompt">System prompt</button>
-      </div>
-      <div id="tab"></div>
-    </div>
-  </section>
 </main>
+
+<div id="backdrop" class="backdrop"></div>
+<aside id="drawer" class="drawer" aria-hidden="true">
+  <div class="dhead"><b id="dtitle"></b><button class="btn sec sm" id="dclose">Close</button></div>
+  <div id="tab" class="dbody"></div>
+</aside>
 
 <script>
 const qs = new URLSearchParams(location.search);
@@ -133,8 +148,10 @@ async function load() { S = await api('state'); render(); }
 
 function render() {
   document.querySelectorAll('#seg button').forEach((b) => b.classList.toggle('on', b.dataset.p === PROFILE));
-  $('engine').textContent = S.llmAvailable ? `LLM on: ${S.llmProvider} / ${S.llmModel}` : 'No API key: rule based fallback (not an LLM)';
-  $('engineNote').textContent = S.llmAvailable ? 'Each Sonic bubble is labelled with the engine that wrote it. A rules label while the LLM is on means the model call failed (see Events).' : 'LLM mode needs GROQ_API_KEY (or ANTHROPIC_API_KEY) on the server.';
+  renderBanner();
+  const n = S.notifications.length, hot = S.notifications.some((x) => (x.level === 'urgent' && !x.feedback) || (x.approval && x.approval.status === 'pending'));
+  const cnt = $('nCount'); cnt.style.display = n ? '' : 'none'; cnt.textContent = n; cnt.classList.toggle('hot', hot);
+  $('engineNote').textContent = S.llmAvailable ? '' : 'LLM mode needs GROQ_API_KEY on the server.';
   $('whoami').innerHTML = S.kind === 'new'
     ? '<b>New user:</b> no saved contacts, no history, no topics, every sharing permission OFF. Even Maya, David and Priya are strangers here.'
     : '<b>Existing user:</b> has contacts (Maya, David, Priya), an apartment search topic, call history and an explicit OTP sharing setting.';
@@ -193,12 +210,28 @@ async function sendMsg() {
 async function hangUp() { const r = await api('call/end', { callId: CALL.id }); CALL = r.call; await load(); }
 
 /* ---------- right panel ---------- */
+function renderBanner() {
+  const el = $('llmBanner');
+  if (!S.llmAvailable) { el.className = 'llm off'; el.innerHTML = 'NOT connected to an LLM. Running on the scripted rule based fallback.<br><small>Set GROQ_API_KEY on the server to switch to the LLM.</small>'; return; }
+  const forced = $('mode').value === 'rules';
+  const last = CALL ? CALL.turns.filter((t) => t.role === 'sonic' && t.engine).slice(-1)[0] : null;
+  if (forced) { el.className = 'llm warn'; el.innerHTML = `Connected to LLM (${esc(S.llmProvider)} / ${esc(S.llmModel)}) but you forced the rule based fallback.`; return; }
+  if (last && last.engine === 'rules') { el.className = 'llm warn'; el.innerHTML = `LLM is configured (${esc(S.llmProvider)} / ${esc(S.llmModel)}) but the last reply fell back to the rules agent.<br><small>The model call failed. Open Events and metrics for the error.</small>`; return; }
+  el.className = 'llm on'; el.innerHTML = `<span class="dot"></span>CONNECTED TO LLM and currently running on it: ${esc(S.llmProvider)} / ${esc(S.llmModel)}<br><small>Every Sonic reply in a call is generated by the LLM, then checked by the privacy guard.</small>`;
+}
+const TITLES = { notif: "Jane's notifications", mem: 'Memory and controls', ev: 'Events and metrics' };
+function openPanel(t) {
+  if ($('drawer').classList.contains('open') && TAB === t) return closePanel();
+  TAB = t; $('dtitle').textContent = TITLES[t];
+  $('drawer').classList.add('open'); $('backdrop').classList.add('open'); $('drawer').setAttribute('aria-hidden', 'false');
+  renderTab();
+}
+function closePanel() { $('drawer').classList.remove('open'); $('backdrop').classList.remove('open'); $('drawer').setAttribute('aria-hidden', 'true'); }
 function renderTab() {
-  document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === TAB));
+  if (!$('drawer').classList.contains('open')) return; // panels render only when opened
   if (TAB === 'notif') return renderNotifs();
   if (TAB === 'mem') return renderMemory();
   if (TAB === 'ev') return renderEvents();
-  if (TAB === 'prompt') return renderPrompt();
 }
 function renderNotifs() {
   const list = S.notifications;
@@ -273,18 +306,15 @@ async function renderEvents() {
   <div class="hint">${esc(m.note)}</div>
   <div class="sec2"><h2>Structured event log (latest 40)</h2><table>${ev.map((e) => `<tr><td>${new Date(e.t).toLocaleTimeString()}</td><td>${esc(e.type)}</td><td>${esc(JSON.stringify(e.data))}</td></tr>`).join('')}</table></div>`;
 }
-async function renderPrompt() {
-  const t = await (await fetch('/api/prompt')).text();
-  $('tab').innerHTML = `<div class="hint">Exact system prompt sent in LLM mode. The rule fallback implements the same policy without a model.</div><pre>${esc(t)}</pre>`;
-}
-
 /* ---------- wiring ---------- */
 $('start').onclick = startCall; $('send').onclick = sendMsg; $('end').onclick = hangUp;
 $('msg').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMsg(); });
 $('preset').onchange = presetChanged;
 document.querySelectorAll('#seg button').forEach((b) => b.onclick = () => { PROFILE = b.dataset.p; history.replaceState(null, '', '?profile=' + PROFILE); CALL = null; load(); });
-document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => { TAB = b.dataset.t; renderTab(); });
-$('openOther').onclick = () => window.open(location.pathname + '?profile=' + (PROFILE === 'new' ? 'existing' : 'new'), '_blank');
+document.querySelectorAll('.tools button').forEach((b) => b.onclick = () => openPanel(b.dataset.t));
+$('dclose').onclick = closePanel; $('backdrop').onclick = closePanel;
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
+$('mode').onchange = renderBanner;
 load();
 </script>
 </body>
