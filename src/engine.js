@@ -74,8 +74,10 @@ class Engine {
       try {
         const out = await llm.callLLM(call, R.context, text);
         reply = out.reply; this.mergeLLMState(call, out.call_state, em); usedLLM = true;
+        this.lastLlmError = null;
       } catch (e) {
-        em('llm_fallback', { error: String(e.message || e) });
+        this.lastLlmError = String(e.message || e).slice(0, 300);
+        em('llm_fallback', { error: this.lastLlmError });
       }
     }
     if (!usedLLM) reply = rules.rulesTurn({ call, store, R }, text, em);
@@ -279,7 +281,7 @@ class Engine {
       permissions: s.permissions, contacts: s.contacts, topics: s.topics, numberNotes: s.numberNotes, callerFlags: s.callerFlags,
       shipments: s.shipments, messages: s.messages.map((m) => ({ id: m.id, from: m.from, type: m.type, text: m.text })),
       notifications: s.notifications, events: s.events.slice(-120), feedback: s.feedback,
-      presets: PRESETS, llmAvailable: llm.available(), llmProvider: llm.provider(), llmModel: llm.modelName(), calendar: s.calendar,
+      presets: PRESETS, llmAvailable: llm.available(), llmProvider: llm.provider(), llmModel: llm.lastUsedModel() || llm.modelName(), llmLastError: this.lastLlmError || null, calendar: s.calendar,
     };
   }
 
