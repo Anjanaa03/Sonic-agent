@@ -12,6 +12,9 @@ const mock = http.createServer((req, res) => {
     if (mode === 'fail') { res.writeHead(500); return res.end('boom'); }
     if (mode === 'json400' && lastReq.body.response_format) { res.writeHead(400); return res.end('{"error":{"message":"json_validate_failed: Failed to generate JSON"}}'); }
     if (mode === 'badmodel' && lastReq.body.model === 'llama-3.3-70b-versatile') { res.writeHead(404); return res.end('{"error":{"message":"model_not_found"}}'); }
+    if (mode === 'plain') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ choices: [{ message: { content: 'Sure, how can I help you today?' } }] })); }
+    if (mode === 'truncated') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ choices: [{ message: { content: '{"reply":"Thanks, I will note that down.","call_state":{"call_type":"unkn' } }] })); }
+    if (mode === 'sameq') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ reply: 'Which company are you with?', call_state: { call_type: 'delivery' } }) } }] })); }
     if (mode === 'nostate') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ reply: 'Sure, go ahead.' }) } }] })); }
     const out = mode === 'leak'
       ? { reply: 'Sure, Jane lives at Flat 302, Maple Residency, Koramangala.', call_state: { call_type: 'unknown', identity_state: 'unknown', escalate: 'none' } }
@@ -46,6 +49,12 @@ mock.listen(0, async () => {
   mode = 'nostate'; // reply without call_state: keep the reply
   r = await e.message('existing', s.call.id, 'More details on the invoice', 'auto');
   ok(r.engine === 'llm' && /go ahead/.test(r.reply), 'reply without call_state should still be used');
+  mode = 'plain'; // plain text instead of JSON: use it as the reply, no "did not return JSON" failure
+  r = await e.message('existing', s.call.id, 'Just checking', 'auto');
+  ok(r.engine === 'llm' && /how can I help/.test(r.reply), 'plain text reply should be used, got engine ' + r.engine);
+  mode = 'truncated'; // JSON cut off by max_tokens: the reply is still recovered
+  r = await e.message('existing', s.call.id, 'One more thing', 'auto');
+  ok(r.engine === 'llm' && /note that down/.test(r.reply), 'truncated JSON should still give the reply');
   mode = 'badmodel'; // configured model missing: next model is tried
   r = await e.message('existing', s.call.id, 'Hello again', 'auto');
   ok(r.engine === 'llm' && lastReq.body.model !== 'llama-3.3-70b-versatile', 'should fall to the next model, used ' + lastReq.body.model);
@@ -62,6 +71,14 @@ mock.listen(0, async () => {
   const sent = JSON.stringify(lastReq.body);
   ok(sent.length / 4 < 3200, 'request too large for a small TPM tier: about ' + Math.round(sent.length / 4) + ' tokens');
   console.log('approx tokens per request (system + context + history + max_tokens):', Math.round(sent.length / 4) + lastReq.body.max_tokens);
+  // stuck guard on an LLM that keeps asking the same thing
+  mode = 'sameq';
+  const s3 = e.startCall('existing', { number: '+91 80000 99999' });
+  const a1 = await e.message('existing', s3.call.id, 'hmm', 'auto');
+  const a2 = await e.message('existing', s3.call.id, 'ok', 'auto');
+  const a3 = await e.message('existing', s3.call.id, 'yes', 'auto');
+  ok(/didn't quite get that/i.test(a2.reply), 'second identical question should be rephrased');
+  ok(a3.ended && /not able to get what I need/i.test(a3.reply), 'third identical question should end the call politely');
   mode = 'fail';
   r = await e.message('existing', s.call.id, 'Hello?', 'auto');
   ok(/Groq 500/.test(e.publicState('existing').llmLastError || ''), 'banner error text missing: ' + e.publicState('existing').llmLastError);

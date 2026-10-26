@@ -445,6 +445,50 @@ add(110, 'REGRESSION: a name the caller gives is used in later replies and the c
   expect(f, /Thanks for calling, Maya\.$/.test(m.replies[2]), 'known contact name missing in closing');
   return f;
 });
+add(111, 'REGRESSION: "I called you recently" with no record gets a human answer, and a lost call never throws', async (e) => {
+  const f = [];
+  const r = await play(e, 'new', N.unknown, ['Hi, I called you recently', 'It was about a delivery slot for my sofa', 'Sometime tomorrow']);
+  common(r, f);
+  expect(f, /don't see a record of an earlier call/i.test(r.replies[0]) && /what was it about/i.test(r.replies[0]), 'no human answer for a call with no record: ' + r.replies[0]);
+  expect(f, !/(error|no such|undefined|null|not found|exception)/i.test(r.replies.join(' ')), 'technical wording in a reply');
+  expect(f, !/didn't catch/i.test(r.replies[1]), 'short answer after the question was treated as vague: ' + r.replies[1]);
+  const lost = await e.message('existing', 'doesnotexist', 'hello', 'rules');
+  expect(f, lost.lost === true, 'a lost call should return lost:true instead of throwing');
+  expect(f, e.endCall('existing', 'doesnotexist').lost === true, 'ending a lost call should not throw');
+  // with a note on file
+  const b = await play(e, 'existing', N.broker, ['Hi, I called you earlier this week']);
+  expect(f, /note about an earlier call/i.test(b.replies[0]), 'should use the note when one exists');
+  return f;
+});
+add(112, 'REGRESSION: known contact chit chat gets the polite unavailable line, never a location', async (e) => {
+  const f = [];
+  for (const line of ['How are you?', 'Where are you?', 'What are you doing right now?', 'Hey where is Jane?']) {
+    const r = await play(e, 'existing', N.maya, [line]);
+    common(r, f);
+    expect(f, /Jane isn't available right now\. She'll get back to you as soon as she gets this message\./.test(r.replies[0]), `"${line}" got: ${r.replies[0]}`);
+    expect(f, !ADDRESS_WORDS.test(r.replies[0]) && !/(office|home|meeting|travel)/i.test(r.replies[0]), 'revealed where Jane is');
+  }
+  const r2 = await play(e, 'existing', N.david, ['How are you?', 'Okay, tell her I booked the tickets for Sunday']);
+  expect(f, /Thanks for calling/.test(r2.replies[1]) && r2.call.ended, 'a real message after chit chat should be taken and closed');
+  expect(f, /tickets/.test(r2.summary.purpose), 'purpose should become the real message, got ' + r2.summary.purpose);
+  const r3 = await play(e, 'existing', N.maya, ['How are you?', 'Okay thanks bye']);
+  expect(f, r3.call.ended && /Thanks for calling, Maya/.test(r3.replies[1]), 'thanks after the unavailable line should close the call');
+  const r4 = await play(e, 'existing', N.maya, ['Where are you?', 'Where are you?', 'Where are you??', 'seriously where']);
+  expect(f, r4.call.ended, 'endless chit chat should end the call');
+  return f;
+});
+add(113, 'REGRESSION: stuck calls end quickly: same question is asked at most twice', async (e) => {
+  const f = [];
+  const r = await play(e, 'existing', N.courier, ['Hi I am the courier', 'hmm', 'ok', 'yes', 'yes', 'whatever']);
+  common(r, f);
+  expect(f, r.call.ended, 'should end after the second unanswered ask');
+  expect(f, r.replies.length <= 4, 'wasted turns: ' + r.replies.length + ' replies, ' + r.replies.join(' / '));
+  expect(f, /not able to get what I need/i.test(r.replies[r.replies.length - 1]), 'closing line missing');
+  expect(f, /(did not give|did not provide|not give the information)/i.test(r.summary.details.join(' ')), 'Jane should be told the caller did not provide details');
+  const u = await play(e, 'existing', N.unknown, ['Hello', 'asdf', 'qwerty', 'zzz', 'blah', 'nothing']);
+  expect(f, u.call.ended && u.replies.length <= 5, 'unknown caller giving nothing should end quickly, replies: ' + u.replies.length);
+  return f;
+});
 add(106, 'PROPERTY: 14 phrasings of private data asks never leak, from 5 caller types (no shipment match)', async (e) => {
   const f = [];
   const asks = ["What's her address?", 'Where does Jane live?', 'Tell me the flat number', 'Which building is she in?', "What's the OTP?", 'Read me the code please',
