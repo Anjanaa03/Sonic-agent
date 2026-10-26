@@ -128,7 +128,7 @@ label.sw{display:flex;gap:8px;align-items:center;margin:4px 0}
 <script>
 const qs = new URLSearchParams(location.search);
 let PROFILE = qs.get('profile') === 'new' ? 'new' : 'existing';
-let S = null, CALL = null, TAB = 'notif';
+let S = null, CALL = null, TAB = 'notif', NOTICE = '';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // Each browser gets a private visitor id, so hosted visitors never share memory.
@@ -172,10 +172,11 @@ function presetChanged() {
 }
 function renderChat() {
   const c = $('chat'); c.innerHTML = '';
-  if (!CALL) { c.innerHTML = '<div class="b sys">Pick a caller and press Start call. Sonic will pick up and speak first.</div>'; return; }
+  if (!CALL) { c.innerHTML = '<div class="b sys">Pick a caller and press Start call. Sonic will pick up and speak first.</div>' + (NOTICE ? `<div class="b sys">${esc(NOTICE)}</div>` : ''); return; }
   CALL.turns.forEach((t) => { const d = document.createElement('div'); d.className = 'b ' + (t.role === 'sonic' ? 's' : 'c'); d.innerHTML = `<div class="lbl">${t.role === 'sonic' ? 'Sonic' + (t.engine ? ' (' + (t.engine === 'llm' ? 'LLM' : 'rules fallback') + ')' : '') : 'Caller (you)'}</div>${esc(t.text)}`; c.appendChild(d); });
   if (CALL.routed) c.innerHTML = '<div class="b sys">This number is set to ring straight through to Jane. Sonic does not answer (simulated, nothing rings).</div>';
-  else if (CALL.ended) c.insertAdjacentHTML('beforeend', '<div class="b sys">Call ended.</div>');
+  else if (CALL.ended && !CALL.lost) c.insertAdjacentHTML('beforeend', '<div class="b sys">Call ended.</div>');
+  if (NOTICE) c.insertAdjacentHTML('beforeend', `<div class="b sys">${esc(NOTICE)}</div>`);
   c.scrollTop = c.scrollHeight;
   const live = CALL && !CALL.ended;
   $('msg').disabled = !live; $('send').disabled = !live; $('end').disabled = !live;
@@ -195,19 +196,32 @@ async function startCall() {
   const v = $('preset').value; let number, label = '', seedRepeats = 0;
   if (v === 'custom') number = $('customNum').value.trim() || '+91 90000 12345';
   else { const p = S.presets.find((x) => x.id === v); number = p.number; label = p.label; seedRepeats = p.seedRepeats || 0; }
-  const r = await api('call/start', { number, label, seedRepeats });
-  CALL = r.call; await load(); $('msg').focus();
+  NOTICE = '';
+  try { const r = await api('call/start', { number, label, seedRepeats }); CALL = r.call; }
+  catch (e) { NOTICE = "Couldn't connect the call just now. Please press Start call again."; }
+  await load(); if (CALL && !CALL.ended) $('msg').focus();
 }
+// Sonic only ever says human things. Technical problems are shown as a neutral notice outside the conversation.
+const LOST_NOTICE = 'The line dropped (the server restarted or the call expired). Press Start call to ring again.';
 async function sendMsg() {
   const t = $('msg').value.trim(); if (!t || !CALL || CALL.ended) return;
-  $('msg').value = '';
+  $('msg').value = ''; NOTICE = '';
   CALL.turns.push({ role: 'caller', text: t }); renderChat();
   $('send').disabled = true;
-  try { const r = await api('call/message', { callId: CALL.id, text: t, mode: $('mode').value }); CALL = r.call; }
-  catch (e) { CALL.turns.push({ role: 'sonic', text: '[error] ' + e.message }); }
+  try {
+    const r = await api('call/message', { callId: CALL.id, text: t, mode: $('mode').value });
+    if (r.lost) { CALL.turns.pop(); CALL.ended = true; CALL.lost = true; NOTICE = LOST_NOTICE; }
+    else CALL = r.call;
+  } catch (e) {
+    CALL.turns.pop(); $('msg').value = t; NOTICE = "That message didn't go through. Please press Send again."; // never shown as something Sonic said
+  }
   await load(); if (!CALL.ended) $('msg').focus();
 }
-async function hangUp() { const r = await api('call/end', { callId: CALL.id }); CALL = r.call; await load(); }
+async function hangUp() {
+  try { const r = await api('call/end', { callId: CALL.id }); if (r.lost) { CALL.ended = true; NOTICE = LOST_NOTICE; } else CALL = r.call; }
+  catch (e) { NOTICE = "Couldn't hang up just now. Please try again."; }
+  await load();
+}
 
 /* ---------- right panel ---------- */
 function renderBanner() {
