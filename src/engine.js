@@ -9,6 +9,15 @@ const nlu = require('./nlu');
 const ORDER = { none: 0, routine: 0, important: 1, urgent: 2 };
 const OUTCOME_LABEL = { resolved: 'Resolved', message_captured: 'Message captured', pending: 'Pending', escalated: 'Escalated', no_purpose: 'Purpose not established' };
 
+const STUCK_CLOSE = "I'm sorry, I'm not able to get what I need on this call. I'll let Jane know, and she'll follow up if needed. Thank you, goodbye.";
+function lastQuestion(reply) { const m = String(reply).match(/[^.?!]*\?/g); return m ? m[m.length - 1].trim() : null; }
+function similar(a, b) {
+  const w = (s) => new Set(s.toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter((x) => x.length > 2));
+  const A = w(a), B = w(b); if (!A.size || !B.size) return false;
+  let inter = 0; for (const x of A) if (B.has(x)) inter++;
+  return inter / (A.size + B.size - inter) >= 0.7;
+}
+
 class Engine {
   constructor() {
     this.stores = { new: seed('new'), existing: seed('existing') };
@@ -60,7 +69,7 @@ class Engine {
   async message(profile, callId, text, mode = 'auto') {
     const store = this.store(profile);
     const call = store.calls[callId];
-    if (!call) throw new Error('no such call');
+    if (!call) return { lost: true, reply: null }; // server restarted or call expired: the page shows a neutral notice, never an error as Sonic
     if (call.ended) return { call: this.publicCall(call), reply: null };
     text = String(text || '').slice(0, 1200);
     call.turns.push({ role: 'caller', text, at: Date.now() });
@@ -88,6 +97,22 @@ class Engine {
       call.state.blocked.push('Output guard blocked a reply: ' + g.reasons.join(', '));
       call.guardFired = (call.guardFired || 0) + 1;
       reply = SAFE_REPLY;
+    }
+    // Stuck guard (both agents): never keep asking the same thing. The second ask is gently rephrased as "didn't get that",
+    // the third time Sonic stops, hands the details to Jane and ends the call. Also a hard cap on call length.
+    const stt = call.state;
+    const callerTurns = call.turns.filter((t) => t.role === 'caller').length;
+    const q = lastQuestion(reply);
+    if (q && call.lastQ && similar(q, call.lastQ)) call.sameQ = (call.sameQ || 0) + 1; else call.sameQ = 0;
+    call.lastQ = q;
+    if (!stt.end_call && (call.sameQ >= 2 || callerTurns > 14)) {
+      reply = STUCK_CLOSE; stt.end_call = true;
+      if (stt.outcome === 'pending' && stt.message_for_jane && !stt.issue) stt.outcome = 'message_captured';
+      stt.issue = stt.issue || 'Caller did not give the information Sonic asked for';
+      stt.notes_for_jane.push(callerTurns > 14 ? 'Sonic ended a very long call' : 'Sonic stopped after asking the same question without getting an answer');
+      em('stuck_call_closed', { turns: callerTurns, question: q });
+    } else if (call.sameQ === 1 && !/^sorry/i.test(reply)) {
+      reply = "Sorry, I didn't quite get that. " + reply;
     }
     call.engineUsed.push(usedLLM ? 'llm' : 'rules');
     call.turns.push({ role: 'sonic', text: reply, at: Date.now(), engine: usedLLM ? 'llm' : 'rules' });
@@ -188,7 +213,7 @@ class Engine {
   endCall(profile, callId, by = 'caller') {
     const store = this.store(profile);
     const call = store.calls[callId];
-    if (!call) throw new Error('no such call');
+    if (!call) return { lost: true, call: null, summary: null };
     if (call.summary) return { call: this.publicCall(call), summary: call.summary };
     const st = call.state;
     if (call.routed) return { call: this.publicCall(call), summary: null };

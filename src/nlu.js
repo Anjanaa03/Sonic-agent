@@ -103,6 +103,9 @@ function intents(raw) {
     // an invitation or availability question about an activity, not any mention of one ("running late for the movie" is a message)
     social: (has(/(dinner|lunch|brunch|coffee|meet ?up|catch up|drinks|movie|party|hang ?out|get together)/, u) && has(/(free|available|join|come|let'?s|can we|want to|wanna|would (she|jane)|will (she|jane)|are you|is jane|plan|invite|should we|shall we|how about|up for)/, u))
       || has(/(are you free|is jane free|is she free|free (on|this|tonight|tomorrow|saturday|sunday)|any plans)/, u),
+    // chit chat or questions aimed at Jane herself ("how are you", "where are you", "what are you doing")
+    smalltalk: has(/(how are you|how r u|how('s| is| are) (it going|everything|life|your day|jane|she|you doing|things)|what('s| is)? ?up\b|whats up|what are you (doing|up to)|what r u doing|how have you been|are you (busy|there|ok|okay|at home|at work|home)|where are you|where r u|where have you been|when are you (coming|back|home|free)|how was your (day|weekend)|miss you|long time|what is jane doing|what's jane doing|is jane (okay|ok|busy|around))/, u),
+    calledBefore: has(/((called|rang|phoned|spoke|talked|messaged|texted|emailed|met).{0,30}(recent|earlier|before|yesterday|last (week|night|time|month)|few days|other day|this morning|ago)|(recent|earlier|previous|last).{0,15}(call|conversation|chat|message)|returning (your|the|a) call|you called me|follow(ing)? up on (my|our|the) (call|conversation))/, u),
     generalContext: has(/(earlier|last time|before|we (discussed|talked|spoke)|that thing|the thing|as discussed|you know|previously|follow(ing)? up|again about|regarding the)/, u),
     vague: has(/^\s*(hi|hello|hey|hello\?|hi there|um+|uh+|hmm+|you know|nothing|just calling|just a call|something|not sure|it's about the thing|its about the thing|about something|never mind|i don't know|idk|yes|yeah|ok|okay)[\s.?!,]*$/, u),
   };

@@ -127,7 +127,8 @@ function rulesTurnCore(ctxObj, raw, emit) {
   if (!['delivery', 'pickup'].includes(st.call_type)) {
     const known = nlu.KNOWN_COMPANIES.some((c) => c.re.test(raw));
     const courierWords = /(courier|parcel|package|deliver|delivery|shipment|pick ?up|awb|consignment|dispatch|delivery partner|\brider\b)/i.test(raw);
-    if (refs.length || known || (!contact && courierWords)) {
+    // a caller explaining an earlier call ("it was about a delivery slot") is not automatically a courier
+    if (refs.length || known || (!contact && courierWords && !fl.askedBackground)) {
       st.call_type = I.pickupWord && !/deliver/i.test(raw) ? 'pickup' : 'delivery';
     } else if (contact) st.call_type = 'known';
     else if (!I.vague) st.call_type = 'unknown';
@@ -309,6 +310,16 @@ function rulesTurnCore(ctxObj, raw, emit) {
 
     // not matched yet
     if (sm.status !== 'matched') {
+      // Do not burn the call: if two turns in a row bring no new company, reference or request, hand over to Jane and end it.
+      const progressKey = [st.company, sm.status, fl.needs.join(',')].join('|');
+      fl.stall = fl.progressKey === progressKey ? (fl.stall || 0) + 1 : 0;
+      fl.progressKey = progressKey;
+      if (fl.stall >= 2 && !fl.awaitContact) {
+        st.issue = 'Caller did not provide the details asked for';
+        setPurpose(`${st.company || 'Courier'} ${taskWord} call, no usable details given`);
+        appendMsg(st, raw);
+        return close(pre + "I'm sorry, I'm not able to get what I need on this call. I'll let Jane know, and she'll follow up if needed. Thank you, goodbye.", 'pending');
+      }
       const sensitive = I.asksOtp || I.asksAddress || I.asksWhereabouts;
       if (sm.status === 'mismatch') {
         fl.suspicious = true; st.identity_state = 'suspicious';
@@ -433,16 +444,26 @@ function rulesTurnCore(ctxObj, raw, emit) {
       fl.mismatchNoted = true;
       st.notes_for_jane.push(`Number is saved as ${nm} but caller said they are ${st.caller_name}. Identity not verified.`);
     }
-    if (I.asksAddress || I.asksLocation) {
-      blocked("Asked for Jane's location, address or schedule");
+    // Address and personal details are always refused, even for people Jane knows.
+    if (I.asksAddress) {
+      blocked("Asked for Jane's address or personal details");
       if (fl.nameMismatch) { fl.suspicious = true; st.identity_state = 'suspicious'; esc('important', 'Unverified caller on a saved number asked for private details'); }
-      const lead = "I can't share where Jane is or any of her details, even with people she knows. ";
+      const lead = "I can't share Jane's personal details, even with people she knows. ";
       if (!st.purpose) return pre + lead + ask('I can pass on a message though. What should I tell her?');
       return pre + lead + 'I can pass on a message.';
     }
-    if (I.asksWhereabouts && !I.social && !st.purpose) {
-      return pre + "I can't speak to Jane's availability, but I can pass on a message. " + ask('What should I tell her?');
+    // Chit chat and questions about Jane herself ("how are you", "where are you", "where is Jane"):
+    // a polite line that she is unavailable and will get back. Nothing about where she is.
+    const words12 = cleaned.split(/\s+/).filter(Boolean).length <= 12;
+    if ((I.smalltalk || I.asksLocation || (I.asksWhereabouts && !I.social)) && !I.social && words12 && (!st.purpose || fl.unavailableSaid)) {
+      if (I.asksLocation || I.asksWhereabouts) blocked('Asked where Jane is or about her availability');
+      if (fl.nameMismatch) { fl.suspicious = true; st.identity_state = 'suspicious'; esc('important', 'Unverified caller on a saved number asked about Jane'); }
+      fl.chitCount = (fl.chitCount || 0) + 1; fl.unavailableSaid = true;
+      setPurpose('General question for Jane (how she is or where she is), no message left');
+      if (fl.chitCount >= 3) return close(pre + 'Thanks for calling. Jane will get back to you as soon as she can.', 'resolved');
+      return pre + "Jane isn't available right now. She'll get back to you as soon as she gets this message.";
     }
+    if (fl.unavailableSaid && (I.thanks || I.done)) return close(pre + 'Thanks for calling.', 'resolved');
     if (fl.nameMismatch && !st.purpose && !fl.stage) {
       return pre + ask("Thanks. I can't confirm who's on this line, so I'll just take a message. What would you like me to pass on?");
     }
@@ -460,7 +481,7 @@ function rulesTurnCore(ctxObj, raw, emit) {
     }
     if (I.generalContext && !fl.contextAsked && !ctxHit) {
       fl.contextAsked = true; appendMsg(st, raw);
-      return pre + ask(`${hi}Which conversation do you mean? I want to be sure I match it correctly.`);
+      return pre + ask(`${hi}Sorry, which conversation do you mean? I don't have a note about that one.`);
     }
     if (I.social) {
       setPurpose(`${nm} asked about plans: ${nlu.shortQuote(cleaned || raw, 120)}`);
@@ -484,6 +505,7 @@ function rulesTurnCore(ctxObj, raw, emit) {
       if (fl.clarifyAsks > 1) { st.outcome = 'no_purpose'; return close(pre + `I'll let Jane know you called${ident ? ', ' + nm : ''}. Goodbye.`, 'no_purpose'); }
       return pre + ask(`${hi}What can I pass on to Jane?`);
     }
+    if (fl.unavailableSaid) st.purpose = nlu.shortQuote(cleaned, 140); // they went on to leave a real message
     setPurpose(nlu.shortQuote(cleaned, 140));
     appendMsg(st, raw);
     const t = nlu.extractTimePhrase(raw); if (t) st.callback_time = t;
@@ -588,11 +610,18 @@ function rulesTurnCore(ctxObj, raw, emit) {
       return close(pre + `Thank you${nm ? ', ' + nm : ''}. I'll pass this on to Jane. Goodbye.`, 'message_captured');
     }
 
+    // "I called you recently": use a note if one exists for this number, otherwise say so plainly and ask what it was about
+    if (I.calledBefore && !fl.askedBackground && !st.purpose) {
+      fl.askedBackground = true;
+      const hasNote = R.internal.notes.length > 0;
+      return pre + rep + ask(hasNote ? 'I do have a note about an earlier call from this number. What was it about?' : "I don't see a record of an earlier call on my side, but I'm happy to help. What was it about?");
+    }
+
     // first substantive input
     const topicHits = R.internal.topics;
     const hasNotes = R.internal.notes.length > 0;
     const vagueish = I.vague || (/\b(the thing|that thing|you know|something|stuff|a thing)\b/i.test(cleaned) && words <= 7);
-    if ((words < 4 || vagueish) && !topicHits.length) {
+    if ((words < 4 || vagueish) && !topicHits.length && !(fl.askedBackground && words >= 2 && !I.vague)) {
       if (nm && !I.vague && words < 2) {
         fl.purposeAsks++;
         if (fl.purposeAsks > 2) { return close(pre + "I'll note that you called. Goodbye.", 'no_purpose'); }

@@ -16,7 +16,7 @@ const GROQ_URL = (process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1')
 const DEFAULT_GROQ_MODEL = 'llama-3.3-70b-versatile'; // override with GROQ_MODEL; check GET /openai/v1/models for what is live
 const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-5-5';
 const MAX_HISTORY = Number(process.env.SONIC_MAX_HISTORY || 10);
-const MAX_OUT = Number(process.env.SONIC_MAX_TOKENS || 300);
+const MAX_OUT = Number(process.env.SONIC_MAX_TOKENS || 450);
 
 function stripHeader(raw) {
   const i = raw.indexOf('\n---\n');
@@ -140,11 +140,26 @@ async function callLLM(call, context, callerText) {
   const system = loadSystemPrompt();
   const messages = buildMessages(call, context, callerText);
   const text = provider() === 'groq' ? await callGroq(system, messages) : await callAnthropic(system, messages);
-  let parsed;
-  try { parsed = extractJson(text); } catch (e) { throw new Error('Model did not return JSON: ' + String(text).slice(0, 120)); }
-  if (typeof parsed.reply !== 'string' || !parsed.reply.trim()) throw new Error('Model JSON had no reply: ' + String(text).slice(0, 120));
-  if (!parsed.call_state || typeof parsed.call_state !== 'object') parsed.call_state = {}; // lenient: keep the reply, skip state merge
-  return parsed;
+  return parseModelOutput(text);
 }
 
-module.exports = { callLLM, available, provider, modelName, lastUsedModel, loadSystemPrompt, buildMessages, compactContext };
+// Small models do not always return clean JSON: output can be cut off at max_tokens, wrapped in thinking tags or code
+// fences, or be plain text. The caller only ever needs a human reply, so salvage it instead of failing the whole turn.
+function parseModelOutput(text) {
+  const t = String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  try {
+    const parsed = extractJson(t);
+    if (typeof parsed.reply === 'string' && parsed.reply.trim()) {
+      if (!parsed.call_state || typeof parsed.call_state !== 'object') parsed.call_state = {};
+      return parsed;
+    }
+  } catch (e) { /* fall through to salvage */ }
+  const m = t.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/); // reply comes first, so a truncated JSON still has it
+  if (m) { try { return { reply: JSON.parse('"' + m[1] + '"'), call_state: {} }; } catch (e) { /* ignore */ } }
+  if (t && !/[{}[\]]/.test(t) && !/```/.test(t) && t.length >= 2 && t.length <= 500) { // plain text answer
+    return { reply: t.replace(/^(sonic|assistant)\s*:\s*/i, '').replace(/^"|"$/g, ''), call_state: {} };
+  }
+  throw new Error('Model did not return a usable reply: ' + t.slice(0, 120));
+}
+
+module.exports = { parseModelOutput, callLLM, available, provider, modelName, lastUsedModel, loadSystemPrompt, buildMessages, compactContext };
